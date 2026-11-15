@@ -483,6 +483,102 @@ namespace Nl.Script.Api
             if (rc == InputCode.Ok) down = d != 0;
             return rc;
         }
+
+        // ---- M-I3 鼠标裸查询（2026-11-15；按钮码 = GLFW 鼠标键码 0=左/1=右/2=中；越界全 0 防御）----
+
+        /// <summary>鼠标键持续态。0=ok / 1=未绑 InputState / 4=非法参数。</summary>
+        public static int MouseIsDown(int button, out bool down)
+        {
+            down = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputMouseIsDownFn>(InputWiring._inputMouseIsDown);
+            int rc = fn(button, out int d);
+            if (rc == InputCode.Ok) down = d != 0;
+            return rc;
+        }
+
+        /// <summary>鼠标键本帧按下边沿（帧末 endFrame 清）。rc 同 MouseIsDown。</summary>
+        public static int MouseJustPressed(int button, out bool pressed)
+        {
+            pressed = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputMouseJustPressedFn>(InputWiring._inputMouseJustPressed);
+            int rc = fn(button, out int p);
+            if (rc == InputCode.Ok) pressed = p != 0;
+            return rc;
+        }
+
+        /// <summary>鼠标键本帧释放边沿（帧末 endFrame 清）。rc 同 MouseIsDown。</summary>
+        public static int MouseJustReleased(int button, out bool released)
+        {
+            released = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputMouseJustReleasedFn>(InputWiring._inputMouseJustReleased);
+            int rc = fn(button, out int r);
+            if (rc == InputCode.Ok) released = r != 0;
+            return rc;
+        }
+
+        /// <summary>光标帧增量（x,y；帧末 endFrame 清）。0=ok / 1=未绑。</summary>
+        public static int MouseDelta(out float dx, out float dy)
+        {
+            dx = dy = 0;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputMouseDeltaFn>(InputWiring._inputMouseDelta);
+            float* d = stackalloc float[2];
+            int rc = fn(d);
+            if (rc == InputCode.Ok) { dx = d[0]; dy = d[1]; }
+            return rc;
+        }
+
+        /// <summary>滚轮帧增量（x,y；帧末 endFrame 清）。0=ok / 1=未绑。</summary>
+        public static int ScrollDelta(out float dx, out float dy)
+        {
+            dx = dy = 0;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputScrollDeltaFn>(InputWiring._inputScrollDelta);
+            float* d = stackalloc float[2];
+            int rc = fn(d);
+            if (rc == InputCode.Ok) { dx = d[0]; dy = d[1]; }
+            return rc;
+        }
+
+        /// <summary>光标绝对位置（窗口像素坐标）+ 在窗口内布尔。0=ok / 1=未绑。</summary>
+        public static int CursorPos(out float x, out float y, out bool hasCursor)
+        {
+            x = y = 0; hasCursor = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputCursorPosFn>(InputWiring._inputCursorPos);
+            float* p = stackalloc float[2];
+            int rc = fn(p, out int h);
+            if (rc == InputCode.Ok) { x = p[0]; y = p[1]; hasCursor = h != 0; }
+            return rc;
+        }
+
+        // ---- M-I5 手柄 / 字符（2026-11-15；GLFW standard mapping）----
+
+        /// <summary>手柄按钮持续态（按钮号 0..15；越界 down=false 防御）。0=ok / 1=未绑。</summary>
+        public static int GamepadIsDown(int button, out bool down)
+        {
+            down = false;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputGamepadIsDownFn>(InputWiring._inputGamepadIsDown);
+            int rc = fn(button, out int d);
+            if (rc == InputCode.Ok) down = d != 0;
+            return rc;
+        }
+
+        /// <summary>手柄轴值（-1..1，扳机 0..1；越界 = 0）。0=ok / 1=未绑。</summary>
+        public static int GamepadAxis(int axis, out float value)
+        {
+            value = 0;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputGamepadAxisFn>(InputWiring._inputGamepadAxis);
+            return fn(axis, out value);
+        }
+
+        /// <summary>
+        /// 文本单码点弹出（window consumeTextChars 队列；-1 = 本帧空）。
+        /// 操作目标 = 宿主 inputSetWindow 绑定的 Window。0=ok（codepoint 有效）/ 0 且 -1 = 空帧 / 1=未绑 Window。
+        /// </summary>
+        public static int TextPop(out int codepoint)
+        {
+            codepoint = -1;
+            var fn = Marshal.GetDelegateForFunctionPointer<InputWiring.InputTextPopFn>(InputWiring._inputTextPop);
+            return fn(out codepoint);
+        }
     }
 
     /// <summary>Log 导出错误码（与 nl/script/Bindings.hpp kLog* 一致）。</summary>

@@ -249,7 +249,8 @@ int cmdRun(const fs::path& projectDir, const std::string& args, const std::strin
 
 int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs::path& ecsDir,
                 const fs::path& bootstrapDir, const fs::path& timeDir, const fs::path& camDir,
-                const fs::path& modelDir, const fs::path& driveDir, const fs::path& propsDir) {
+                const fs::path& modelDir, const fs::path& driveDir, const fs::path& propsDir,
+                const fs::path& mouseDir, const fs::path& gamepadDir) {
     std::printf("nl-script selftest: project=%s\n", projectDir.string().c_str());
 
     // 编译示例工程（热重编测试的工作目录也由此保证存在）
@@ -1418,6 +1419,119 @@ int cmdSelftest(const fs::path& projectDir, const fs::path& consoleDir, const fs
         }
     }
 
+    // ---- s14 鼠标裸查询域（M-I3；mouseDir 为空 = 跳过，同 s6~s13 口径）----
+    // 注入路径验收：feedMouseButton/feedMouseDelta/feedScroll/feedCursor 合成序列
+    // → C# Mouse* 导出逐位锚（M-I0 注入契约同款：注入与窗口路径同一更新内核）。
+    if (!mouseDir.empty()) {
+        if (!dotnetBuild(mouseDir.string(), {})) {
+            expectTrue(false, "s14-pre dotnet build mouse example");
+            std::printf("nl-script selftest: FAIL (mouse binding build)\n");
+            return 1;
+        }
+        auto mso = locateOutput(mouseDir, {});
+        expectTrue(mso.has_value(), "s14-pre locate MouseScript build output");
+        if (mso) {
+            const std::string mouseType = "NlScript.Examples.MouseScript, " + mso->assemblyName;
+            nl::script::EntryPointFn mouseBound = nullptr, mouseUnbound = nullptr;
+            result = vm->getEntryPoint(mso->assemblyDll.string(), mouseType, "BoundProbe", &mouseBound);
+            result = vm->getEntryPoint(mso->assemblyDll.string(), mouseType, "UnboundProbe", &mouseUnbound);
+            expectTrue(result.ok && mouseUnbound != nullptr, "s14-pre locate mouse entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry14 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 宿主活实例（M-I0 注入锚数值：左键 0 / 右键 1；增量 3.5/-2.0/1.25 全精确浮点）
+                static nl::core::InputState input14;
+                input14.feedMouseButton(0, true);           // 左键 down + justPressed
+                input14.feedMouseButton(1, true);           // 右键先按下
+                input14.feedMouseButton(1, false);          // 再释放 → justReleased（down=false）
+                input14.feedMouseDelta(3.5f, -2.0f);
+                input14.feedScroll(0.0f, 1.25f);
+                input14.feedCursor(640.0f, 360.0f, true);
+                nl::script::inputSetState(&input14);
+
+                {
+                    auto [hit, ret] = callEntry14(mouseBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s14a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s14a detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // s14b：解绑路径（nullptr = NoSource 全族）
+                nl::script::inputSetState(nullptr);
+                {
+                    auto [hit, ret] = callEntry14(mouseUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s14b C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
+    // ---- s15 手柄 / 字符域（M-I5；gamepadDir 为空 = 跳过，同 s6~s14 口径）----
+    // 注入路径验收：feedGamepadButton/feedGamepadAxis 合成序列 → C# 手柄导出锚；
+    // TextPop 在 selftest 无 Window → 全程 NoSource（viewer scene 模式 inputSetWindow
+    // 接线的正路径由 viewer 手工冒烟背书，窗口级 consumeTextChars 正路径 M-C1 已覆盖）。
+    if (!gamepadDir.empty()) {
+        if (!dotnetBuild(gamepadDir.string(), {})) {
+            expectTrue(false, "s15-pre dotnet build gamepad example");
+            std::printf("nl-script selftest: FAIL (gamepad binding build)\n");
+            return 1;
+        }
+        auto gso = locateOutput(gamepadDir, {});
+        expectTrue(gso.has_value(), "s15-pre locate GamepadScript build output");
+        if (gso) {
+            const std::string gamepadType = "NlScript.Examples.GamepadScript, " + gso->assemblyName;
+            nl::script::EntryPointFn padBound = nullptr, padUnbound = nullptr;
+            result = vm->getEntryPoint(gso->assemblyDll.string(), gamepadType, "BoundProbe", &padBound);
+            result = vm->getEntryPoint(gso->assemblyDll.string(), gamepadType, "UnboundProbe", &padUnbound);
+            expectTrue(result.ok && padUnbound != nullptr, "s15-pre locate gamepad entries (UnmanagedCallersOnly)");
+            if (!result.ok) {
+                std::printf("  entry detail: code=%d %s\n", result.code, result.message.c_str());
+            } else {
+                const nl::script::ApiTable* table = nl::script::consoleApiTable();
+                auto callEntry15 = [&](nl::script::EntryPointFn fn) {
+                    std::int32_t ret = 0;
+                    std::uint32_t exc = 0;
+                    const int hit = guardedCall(fn, const_cast<void*>(static_cast<const void*>(table)),
+                                                0, &ret, &exc);
+                    return std::pair<int, std::int32_t>{hit, hit == 0 ? ret : -2000 - static_cast<std::int32_t>(exc)};
+                };
+
+                // 宿主活实例（注入锚数值：A=0 / B=1；轴 0=左摇杆X / 4=左扳机）
+                static nl::core::InputState input15;
+                input15.feedGamepadButton(0, true);          // A down + justPressed
+                input15.feedGamepadButton(1, true);          // B 先按下
+                input15.feedGamepadButton(1, false);         // 再释放 → justReleased
+                input15.feedGamepadAxis(0, 0.75f);
+                input15.feedGamepadAxis(4, 0.5f);
+                nl::script::inputSetState(&input15);
+                // inputSetWindow 不调（selftest 无窗口；TextPop 负向 = NoSource）。
+
+                {
+                    auto [hit, ret] = callEntry15(padBound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s15a C# BoundProbe -> 0");
+                    if (hit != 0 || ret != 0)
+                        std::printf("  s15a detail: hit=%d ret=%d\n", hit, ret);
+                }
+
+                // s15b：解绑路径（nullptr = NoSource 全族）
+                nl::script::inputSetState(nullptr);
+                {
+                    auto [hit, ret] = callEntry15(padUnbound);
+                    expectInt(hit == 0 ? ret : -2000, 0, "s15b C# UnboundProbe -> 0");
+                }
+            }
+        }
+    }
+
     std::printf("nl-script selftest: %s (%d failure%s)\n", g_failures == 0 ? "PASS" : "FAIL",
                 g_failures, g_failures == 1 ? "" : "s");
     return g_failures == 0 ? 0 : 1;
@@ -1432,7 +1546,7 @@ void usage() {
         "             --api passes ApiTable* to Entry (console-binding scripts)\n"
         "  nl-script selftest <projectDir> [consoleProjectDir] [ecsProjectDir] [bootstrapDir]\n"
         "                    [timeinputProjectDir] [cameraProjectDir] [modelProjectDir]\n"
-        "                    [driveProjectDir] [propsProjectDir]               full machine-checked acceptance\n"
+        "                    [driveProjectDir] [propsProjectDir] [mouseProjectDir] [gamepadProjectDir]  full machine-checked acceptance\n"
         "exit codes: 0=PASS / 1=fail / 2=usage\n");
 }
 
@@ -1486,7 +1600,9 @@ int main(int argc, char** argv) {
         const fs::path modelDir = argc >= 9 ? fs::weakly_canonical(argv[8]) : fs::path();
         const fs::path driveDir = argc >= 10 ? fs::weakly_canonical(argv[9]) : fs::path();
         const fs::path propsDir = argc >= 11 ? fs::weakly_canonical(argv[10]) : fs::path();
-        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir, propsDir);
+        const fs::path mouseDir = argc >= 12 ? fs::weakly_canonical(argv[11]) : fs::path();
+        const fs::path gamepadDir = argc >= 13 ? fs::weakly_canonical(argv[12]) : fs::path();
+        return cmdSelftest(fs::weakly_canonical(argv[2]), consoleDir, ecsDir, bootstrapDir, timeDir, camDir, modelDir, driveDir, propsDir, mouseDir, gamepadDir);
     }
     usage();
     return 2;

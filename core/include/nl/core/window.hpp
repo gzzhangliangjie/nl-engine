@@ -3,12 +3,13 @@
 #include <cstddef>
 #include <memory>
 #include <string>
+#include <vector>
 
 namespace nl::core {
 
 // M0.5：游戏热键边沿。M-C1：Grave(`)=控制台呼出、Tab=补全请求（viewer 边沿消费，
 // 不进 ImGui 文本流；其余键全量以 KeyEvent 通道喂 ImGui，见 consumeKeyEvents）。
-enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, V, N, F12, Grave, Tab, T, Count };
+enum class Key { Unknown = 0, Escape, Space, Enter, W, A, S, D, C, R, V, N, F12, Grave, Tab, T, F10, Count };
 
 struct WindowDesc {
     int         width  = 1280;
@@ -84,6 +85,21 @@ public:
     bool leftButtonDown() const;
     // M0.5 HUD 输入：窗口坐标系里的绝对鼠标位置（ImGui IO 需要，非边沿触发）。
     void mousePosition(float& x, float& y) const;
+
+    // M-I3 指针锁定（UE GameViewportClient::SetMouseCaptureMode 三档取一 =
+    // CapturePermanently 语义）：on = GLFW_CURSOR_DISABLED 持续捕获（光标隐藏、
+    // 光标回调持续吐无界虚拟坐标 → consumeMouse 相对增量照常），off = NORMAL。
+    // 释放/重捕获由调用方决定（viewer 约定：F10 切换、Esc 保持退出语义）。
+    void setMouseCaptured(bool on);
+    bool mouseCaptured() const;
+
+    // M-I5：文件拖拽（glfwSetDropCallback → 消费制队列；路径原样透出，
+    // 白名单/加载校验归消费方）。读一次即清。
+    std::vector<std::string> consumeDroppedPaths();
+
+    // M-I5：测试注入口——`--drop-sim` 确定性旗标走同一队列（真实 OS 拖拽事件
+    // 无法自动化对拍；注入与窗口路径同一消费端）。
+    void feedDroppedPath(const std::string& path);
 
     // M0.2：渲染器拿它创建原生 surface / swapchain
     void* nativeHandle() const;

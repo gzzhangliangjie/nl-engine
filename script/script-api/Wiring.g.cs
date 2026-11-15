@@ -191,11 +191,11 @@ namespace Nl.Script.Api
         }
     }
 
-    /// <summary>Input 域接线（生成物；ApiTable 偏移 18..22 = exports.api 声明序）。</summary>
+    /// <summary>Input 域接线（生成物；ApiTable 偏移 18..22,45..53 = exports.api 声明序）。</summary>
     internal static unsafe class InputWiring
     {
         // ---- C++ 侧函数指针（偏移序 = ApiTable 字段序）----
-        public static IntPtr _inputActionFind, _inputActionBool, _inputActionFloat, _inputActionVec2, _inputKeyIsDown;
+        public static IntPtr _inputActionFind, _inputActionBool, _inputActionFloat, _inputActionVec2, _inputKeyIsDown, _inputMouseIsDown, _inputMouseJustPressed, _inputMouseJustReleased, _inputMouseDelta, _inputScrollDelta, _inputCursorPos, _inputGamepadIsDown, _inputGamepadAxis, _inputTextPop;
 
         /// <summary>ActionMap::find（预声明口径）。rc：0=ok（id 有效）/ 1=未绑 ActionMap / 2=动作不存在（id=kInvalidAction=0xFFFFFFFF）</summary>
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
@@ -217,6 +217,42 @@ namespace Nl.Script.Api
         [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
         public delegate int InputKeyIsDownFn(int key, out int down);
 
+        /// <summary>InputState::mouseIsDown（GLFW 鼠标键码；越界 = down 0 防御透传）。rc：0=ok / 1=未绑 InputState / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputMouseIsDownFn(int button, out int down);
+
+        /// <summary>InputState::mouseJustPressed（本帧边沿）。rc 同 inputMouseIsDown</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputMouseJustPressedFn(int button, out int pressed);
+
+        /// <summary>InputState::mouseJustReleased（本帧边沿）。rc 同 inputMouseIsDown</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputMouseJustReleasedFn(int button, out int released);
+
+        /// <summary>InputState::mouseDelta（光标帧增量 x,y）。rc：0=ok / 1=未绑 InputState</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputMouseDeltaFn(float* delta);
+
+        /// <summary>InputState::scrollDelta（滚轮帧增量 x,y）。rc：0=ok / 1=未绑 InputState</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputScrollDeltaFn(float* delta);
+
+        /// <summary>InputState::cursorPosition + hasCursor（光标在窗口内布尔）。rc：0=ok / 1=未绑 InputState</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputCursorPosFn(float* pos, out int hasCursor);
+
+        /// <summary>InputState::gamepadIsDown（GLFW standard 按钮号；越界 = down 0 防御）。rc：0=ok / 1=未绑 InputState / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputGamepadIsDownFn(int button, out int down);
+
+        /// <summary>InputState::gamepadAxis（轴值 -1..1 / 扳机 0..1；越界 = 0）。rc：0=ok / 1=未绑 InputState / 4=非法参数</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputGamepadAxisFn(int axis, out float value);
+
+        /// <summary>单码点弹出（window consumeTextChars 队列；-1 = 空）。宿主须 inputSetWindow 绑 Window（viewer scene 模式接线；nl-script selftest 只验 NoSource 负向——无窗口）。rc：0=ok（codepoint 有效）/ 1=未绑 Window / 0 且 -1 = 队列空（正常空帧）</summary>
+        [UnmanagedFunctionPointer(CallingConvention.Cdecl)]
+        public delegate int InputTextPopFn(out int codepoint);
+
         /// <summary>由 ApiWiring.InitAll 调用（读本域偏移段）。</summary>
         public static void Init(IntPtr table)
         {
@@ -225,6 +261,15 @@ namespace Nl.Script.Api
             _inputActionFloat = Marshal.ReadIntPtr(table, 20 * sizeof(IntPtr));
             _inputActionVec2 = Marshal.ReadIntPtr(table, 21 * sizeof(IntPtr));
             _inputKeyIsDown = Marshal.ReadIntPtr(table, 22 * sizeof(IntPtr));
+            _inputMouseIsDown = Marshal.ReadIntPtr(table, 45 * sizeof(IntPtr));
+            _inputMouseJustPressed = Marshal.ReadIntPtr(table, 46 * sizeof(IntPtr));
+            _inputMouseJustReleased = Marshal.ReadIntPtr(table, 47 * sizeof(IntPtr));
+            _inputMouseDelta = Marshal.ReadIntPtr(table, 48 * sizeof(IntPtr));
+            _inputScrollDelta = Marshal.ReadIntPtr(table, 49 * sizeof(IntPtr));
+            _inputCursorPos = Marshal.ReadIntPtr(table, 50 * sizeof(IntPtr));
+            _inputGamepadIsDown = Marshal.ReadIntPtr(table, 51 * sizeof(IntPtr));
+            _inputGamepadAxis = Marshal.ReadIntPtr(table, 52 * sizeof(IntPtr));
+            _inputTextPop = Marshal.ReadIntPtr(table, 53 * sizeof(IntPtr));
         }
     }
 
@@ -388,7 +433,7 @@ namespace Nl.Script.Api
     public static class ApiWiring
     {
         public static readonly string[] DomainOrder = new[] { "Engine", "Ecs", "Time", "Input", "Log", "Camera", "Physics", "Props", "Ui" };
-        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle", "propsPushBegin", "propsDescAdd", "uiLoadDocument", "uiCloseDocument", "uiShowDocument", "uiElementSetText", "uiElementGetText", "uiSetEventCallback" };
+        public static readonly string[] ExportOrder = new[] { "cvarGet", "cvarSet", "cvarList", "consoleExec", "consoleRegister", "consoleUnregister", "ecsSpawn", "ecsRemove", "ecsFlush", "ecsExists", "ecsSetParent", "ecsGetParent", "ecsAddTransform", "ecsTransformGet", "ecsTransformSet", "ecsFindByName", "timeGetState", "timeSetState", "inputActionFind", "inputActionBool", "inputActionFloat", "inputActionVec2", "inputKeyIsDown", "logWrite", "logSetFilter", "cameraGetPose", "cameraSetPose", "cameraGetFov", "cameraSetFov", "ecsAttachModel", "ecsDetachModel", "ecsModelInfo", "physicsAddVehicle", "physicsRemoveVehicle", "physicsSetVehicleInput", "vehicleFullPose", "teleportVehicle", "propsPushBegin", "propsDescAdd", "uiLoadDocument", "uiCloseDocument", "uiShowDocument", "uiElementSetText", "uiElementGetText", "uiSetEventCallback", "inputMouseIsDown", "inputMouseJustPressed", "inputMouseJustReleased", "inputMouseDelta", "inputScrollDelta", "inputCursorPos", "inputGamepadIsDown", "inputGamepadAxis", "inputTextPop" };
 
         public static void InitAll(IntPtr table)
         {

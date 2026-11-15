@@ -47,7 +47,7 @@ class DebugScene;
 #include <vector>
 
 namespace nl::scene { class World; }
-namespace nl::core { class GameClock; class InputState; class ActionMap; }
+namespace nl::core { class GameClock; class InputState; class ActionMap; class Window; }
 
 namespace nl::script {
 
@@ -122,6 +122,7 @@ void ecsSetWorld(scene::World* world);
 void timeSetClock(core::GameClock* clock);
 void inputSetState(core::InputState* state);
 void inputSetActionMap(core::ActionMap* map);
+void inputSetWindow(core::Window* window);   // M-I5：inputTextPop 操作目标（nullptr = 解绑）
 
 // 宿主侧相机绑定源（v4 M-SC6）：现役相机经 4 个函数指针适配进 core——
 // Bindings.cpp 在 nl_core，**不能反向 include viewer**（依赖方向不变），

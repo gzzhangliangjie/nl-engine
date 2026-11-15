@@ -5,6 +5,8 @@
 
 #include <cmath>
 #include <cstring>
+#include <fstream>
+#include <json.hpp>
 
 namespace nl::core {
 
@@ -86,6 +88,136 @@ void ActionMap::bindAxisKey(ActionId id, int glfwKey, int axis, float scale) {
     actions_[id].bindings.push_back(b);
 }
 
+// ---- M-I5 手柄绑定 ----
+
+void ActionMap::bindGamepadButton(ActionId id, int button, float scale) {
+    if (id >= actions_.size()) return;
+    Binding b;
+    b.source = Source::GamepadButton;
+    b.index = button;
+    b.scale = scale;
+    actions_[id].bindings.push_back(b);
+}
+
+void ActionMap::bindGamepadAxis(ActionId id, int axis, float scale) {
+    if (id >= actions_.size()) return;
+    Binding b;
+    b.source = Source::GamepadAxis;
+    b.index = axis;
+    b.scale = scale;
+    actions_[id].bindings.push_back(b);
+}
+
+// ---- M-I5 运行时重绑定（有意偏离 Carrot「poll 后冻结」，P8-INPUT-PLAN §7.3）----
+
+bool ActionMap::rebind(ActionId id, const std::vector<Binding>& bindings) {
+    if (id >= actions_.size()) return false;
+    actions_[id].bindings = bindings;
+    return true;   // 生效点 = 下一次 update()
+}
+
+// ---- M-I5 映射文件（vendored nlohmann json；scene 序列化同款依赖，零新依赖）----
+// 全量校验后一次性应用：任何解析/校验错误返回 false + outError 原因，map 不动。
+bool ActionMap::loadFromFile(const char* path, std::string& outError) {
+    outError.clear();
+    if (!path || !*path) { outError = "path empty"; return false; }
+    std::ifstream f(path, std::ios::binary);
+    if (!f) { outError = std::string("open failed: ") + path; return false; }
+    nlohmann::json j;
+    try { f >> j; }
+    catch (const std::exception& e) { outError = std::string("parse: ") + e.what(); return false; }
+    if (!j.contains("actions") || !j["actions"].is_array()) {
+        outError = "missing \"actions\" array"; return false;
+    }
+
+    // 先全量解析到临时结构（Pending），全部合法才提交——错误中途不污染 map。
+    struct Pending {
+        std::string name;
+        Type type = Type::Bool;
+        std::uint32_t setMask = 0;
+        std::vector<Binding> bindings;
+    };
+    std::vector<std::string> pendingSets;
+    if (j.contains("sets")) {
+        if (!j["sets"].is_array()) { outError = "\"sets\" must be array"; return false; }
+        for (const auto& s : j["sets"]) {
+            if (!s.is_string()) { outError = "\"sets\" entry must be string"; return false; }
+            pendingSets.push_back(s.get<std::string>());
+        }
+        if (pendingSets.size() > static_cast<std::size_t>(kMaxSets)) {
+            outError = "sets exceed kMaxSets(32)"; return false;
+        }
+    }
+
+    auto parseBinding = [&](const nlohmann::json& b, Binding& out, std::string& err) -> bool {
+        if (!b.contains("src") || !b["src"].is_string()) { err = "bind missing \"src\""; return false; }
+        const std::string src = b["src"].get<std::string>();
+        const int id = b.value("id", 0);
+        const float scale = static_cast<float>(b.value("scale", 1.0));
+        if (src == "key")          { out.source = Source::Key; out.index = id; }
+        else if (src == "mouse")   { out.source = Source::MouseButton; out.index = id; }
+        else if (src == "scrollX") { out.source = Source::ScrollX; }
+        else if (src == "scrollY") { out.source = Source::ScrollY; }
+        else if (src == "deltaX")  { out.source = Source::DeltaX; }
+        else if (src == "deltaY")  { out.source = Source::DeltaY; }
+        else if (src == "pad")     { out.source = Source::GamepadButton; out.index = id; }
+        else if (src == "padAxis") { out.source = Source::GamepadAxis; out.index = id; }
+        else { err = "unknown src: " + src; return false; }
+        out.scale = scale;
+        out.vecAxis = b.value("axis", -1);
+        return true;
+    };
+
+    std::vector<Pending> pending;
+    for (const auto& a : j["actions"]) {
+        Pending p;
+        if (!a.contains("name") || !a["name"].is_string()) { outError = "action missing \"name\""; return false; }
+        p.name = a["name"].get<std::string>();
+        if (p.name.empty()) { outError = "action name empty"; return false; }
+        const std::string ty = a.value("type", "bool");
+        if      (ty == "bool")  p.type = Type::Bool;
+        else if (ty == "float") p.type = Type::Float;
+        else if (ty == "vec2")  p.type = Type::Vec2;
+        else { outError = "unknown type: " + ty; return false; }
+        if (a.contains("sets")) {
+            if (!a["sets"].is_array()) { outError = "action \"sets\" must be array"; return false; }
+            for (const auto& s : a["sets"]) {
+                if (!s.is_string()) { outError = "action \"sets\" entry must be string"; return false; }
+                const std::string sn = s.get<std::string>();
+                std::uint32_t bit = 0;
+                bool found = false;
+                for (std::size_t i = 0; i < pendingSets.size(); ++i)
+                    if (pendingSets[i] == sn) { bit = 1u << i; found = true; break; }
+                if (!found) { outError = "action references unknown set: " + sn; return false; }
+                p.setMask |= bit;
+            }
+        }
+        if (!a.contains("binds") || !a["binds"].is_array()) { outError = "action missing \"binds\""; return false; }
+        for (const auto& b : a["binds"]) {
+            Binding bind;
+            std::string err;
+            if (!parseBinding(b, bind, err)) { outError = "action \"" + p.name + "\": " + err; return false; }
+            p.bindings.push_back(bind);
+        }
+        pending.push_back(std::move(p));
+    }
+
+    // 提交：先组后动作（set 引用已在校验期闭合）。名字进 ownedNames_ 持有
+    //（define 的 name 是调用方字面量裸指针口径——文件名必须活过 selftest 进程）。
+    for (const auto& s : pendingSets) {
+        ownedSetNames_.push_back(s);
+        setNames_.push_back(ownedSetNames_.back().c_str());
+    }
+    for (auto& p : pending) {
+        ownedNames_.push_back(std::move(p.name));
+        const char* namePtr = ownedNames_.back().c_str();
+        ActionId id = define(namePtr, p.type);
+        actions_[id].setMask = p.setMask;
+        actions_[id].bindings = std::move(p.bindings);
+    }
+    return true;
+}
+
 void ActionMap::setActive(SetId id, bool active) {
     if (id >= setNames_.size()) return;
     const std::uint32_t bit = 1u << id;
@@ -114,6 +246,8 @@ float ActionMap::sourceFloat(const InputState& in, const Binding& b) const {
         case Source::ScrollY:    v = in.scrollDelta().y; break;
         case Source::DeltaX:     v = in.mouseDelta().x; break;
         case Source::DeltaY:     v = in.mouseDelta().y; break;
+        case Source::GamepadButton: v = in.gamepadIsDown(b.index) ? 1.0f : 0.0f; break;  // M-I5
+        case Source::GamepadAxis:   v = in.gamepadAxis(b.index); break;                  // M-I5（扳机 0..1 其余 -1..1）
     }
     return v * b.scale;
 }

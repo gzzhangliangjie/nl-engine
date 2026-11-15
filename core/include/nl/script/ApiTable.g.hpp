@@ -121,6 +121,24 @@ struct ApiTable
     void* uiElementGetText;
     // Ui.uiSetEventCallback — 注册 Ui 事件回调（ABI：int fn(const char* elId, const char* eventType, const char* param)；reverse P/Invoke，script-api 静态保活随 collectible ALC 整体回收）。rc：0=ok / 1=未绑 UiSink / 4=非法参数（fn 空）
     void* uiSetEventCallback;
+    // Input.inputMouseIsDown — InputState::mouseIsDown（GLFW 鼠标键码；越界 = down 0 防御透传）。rc：0=ok / 1=未绑 InputState / 4=非法参数
+    void* inputMouseIsDown;
+    // Input.inputMouseJustPressed — InputState::mouseJustPressed（本帧边沿）。rc 同 inputMouseIsDown
+    void* inputMouseJustPressed;
+    // Input.inputMouseJustReleased — InputState::mouseJustReleased（本帧边沿）。rc 同 inputMouseIsDown
+    void* inputMouseJustReleased;
+    // Input.inputMouseDelta — InputState::mouseDelta（光标帧增量 x,y）。rc：0=ok / 1=未绑 InputState
+    void* inputMouseDelta;
+    // Input.inputScrollDelta — InputState::scrollDelta（滚轮帧增量 x,y）。rc：0=ok / 1=未绑 InputState
+    void* inputScrollDelta;
+    // Input.inputCursorPos — InputState::cursorPosition + hasCursor（光标在窗口内布尔）。rc：0=ok / 1=未绑 InputState
+    void* inputCursorPos;
+    // Input.inputGamepadIsDown — InputState::gamepadIsDown（GLFW standard 按钮号；越界 = down 0 防御）。rc：0=ok / 1=未绑 InputState / 4=非法参数
+    void* inputGamepadIsDown;
+    // Input.inputGamepadAxis — InputState::gamepadAxis（轴值 -1..1 / 扳机 0..1；越界 = 0）。rc：0=ok / 1=未绑 InputState / 4=非法参数
+    void* inputGamepadAxis;
+    // Input.inputTextPop — 单码点弹出（window consumeTextChars 队列；-1 = 空）。宿主须 inputSetWindow 绑 Window（viewer scene 模式接线；nl-script selftest 只验 NoSource 负向——无窗口）。rc：0=ok（codepoint 有效）/ 1=未绑 Window / 0 且 -1 = 队列空（正常空帧）
+    void* inputTextPop;
 };
 
 } // namespace nl::script

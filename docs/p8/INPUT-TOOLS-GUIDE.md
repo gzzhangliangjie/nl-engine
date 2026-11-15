@@ -81,3 +81,31 @@ viewer 侧的调试可见层（唯一触碰渲染处，只加不改）。与 inp
 - **数据流（单消费者铁律）**：viewer 绝不调 `updateFromWindow`（与 ImGui 键盘通道抢队列）。输入全走注入 API：面板 checkbox（W/A/S/D/Space/Esc/LMB 双向态 + release all + ui set 开关）→ 请求态持久在 runNormal 局部 → renderFrame 后读回 → 下帧首转 `feedKey/feedMouseButton` 边沿；帧节奏 feed → `ActionMap::update` → 面板快照 → `endFrame`。面板底部明示 `window-path input: off`。
 - **确定性截图**：`--input-demo [start]` 帧序号驱动注入脚本（W@start / D@+1 / Space@+2 / Esc@+3，只 press；可选起始迭代号缺省 5，无值形式直跟其它 --arg 不吞参）。配 `--frames 8` 时 Esc 的 PRESSED 边沿正好落在截图帧：面板可见 W/D/Space 绿 down + throttle/steer +1.00 + handbrake=1 + pause=1+PRESSED（ui 组由 viewer 显式激活——出厂关的组面板要演示 pause 就得开）。证据链：demo log 锚（`input-demo: inject key 256 at iter 8`）+ `fc /b` 双后端 PNG 逐字节基线（`example/input-m2/run.bat` 五段式）。
 - **ImGui 坑留痕**：`SameLine()` 后的 if/else-if 分支必须每支都有 item——悬空 SameLine 会把后续行全部折叠到本行（首版 pause 行整行消失并与 handbrake 行重叠，条值同值同位隐形）。
+
+## M-I3~I5：鼠标裸查询 / 拾取 / 重映射 / 拖拽 / 手柄（2026-11-15，tag `input-m3`~`input-m5`）
+
+第二批扩展（用户拍板「整体 review 全做」），计划与实读留痕见 `P8-INPUT-PLAN.md` §7。
+
+### input-tools 新节 `actions-file`
+
+- `input-tools selftest actions-file`：映射文件装载（手柄 A→fire Bool / 左摇杆X→steer Float / W→throttle 键源）+ 组开关清零语义在文件面成立 + 负向三连（unknown src / unknown set / 失败不污染 map）+ `rebind` 冻结语义（生效点 = 下一次 update，throttle W→S 改绑后值翻符号）+ 手柄直查防御面（越界 feed no-op、边沿 endFrame 清）。
+- 映射文件格式（`.actions.json`，vendored nlohmann——scene 序列化同款依赖）：
+  `{"sets":["driving"],"actions":[{"name":"fire","type":"bool","sets":["driving"],"binds":[{"src":"pad","id":0}]}]}`；src 全集 `key|mouse|scrollX|scrollY|deltaX|deltaY|pad|padAxis`；全部校验后一次性应用，任何错误 = false + 原因、map 不动。
+- **C1061 坑留痕**：viewer/main.cpp 选项 else-if 梯子 120 项贴 MSVC 块嵌套上限——`--pick`/`--pick-at`/`--drop-sim`/`--mouse-capture` 一律走 parseArgs 开头独立预扫环，主梯子保持 master 原样。
+
+### 脚本侧（nl-script selftest s14 / s15）
+
+- s14 `MouseScript`：`MouseIsDown/MouseJustPressed/MouseJustReleased/MouseDelta/ScrollDelta/CursorPos` 六 op 注入锚（左键 down+pressed、右键 released、增量 3.5/-2.0、滚轮 1.25、光标 640,360）+ 解绑 NoSource 全族。操作目标 = `inputSetState` 绑定的 InputState（同 v3 Input 域）。
+- s15 `GamepadScript`：`GamepadIsDown/GamepadAxis` 锚（A=0 down、B tap released、左摇杆X 0.75、左扳机 0.5、越界防御）+ `TextPop` 在 selftest 无窗口 = NoSource 负向。viewer scene 模式已接 `inputSetWindow(&window)`——`TextPop` 正路径消费 `consumeTextChars`（M-C1 通道，反引号已过滤）。
+- 命令：`nl-script selftest <project> <console> <ecs> <bootstrap> <timeinput> <camera> <model> <drive> <props> <mouse> <gamepad>`（新目录均为可选追加参数，旧卡命令不变）。
+
+### viewer 新旗标（全部缺省关 = 零漂移）
+
+| 旗标 | 行为 | 确定性验收 |
+|---|---|---|
+| `--mouse-capture` | 启动即 GLFW_CURSOR_DISABLED 持续捕获（UE CapturePermanently 语义锚）；**F10 切换**（Esc=退出约定让位） | log 锚 `mouse capture -> on (--mouse-capture)` / F10 行 |
+| `--pick` | scene 模式左键点击拾取（consumeMouseButtonEvents 边沿 + 光标位置反投影） | log 锚 `pick -> entity ...` / `pick -> none` |
+| `--pick-at <px,py>` | 首帧定点注入拾取（真实鼠标不进对拍，M-NL2 旗标同构） | 同上，tool/image 卡 expectLog |
+| `--drop-sim <path>` | 首帧模拟文件拖拽（与真实 dropCallback 同一消费队列） | log 锚 `drop -> <path>` |
+
+拾取实现（viewer/pick.hpp，纯 CPU 零渲染改动）：UE DeprojectScreenPositionToWorld 口径锚（near/far 反投影、手写 inverseMat4）→ glTF 顶点 AABB（节点变换已烘焙）× 实体世界矩阵 → slab 求交最近 t；命中/未命中都出 log。模型加载集成（拖文件进场景）留游戏壳/编辑器接线，本轮只落通道 + 锚。

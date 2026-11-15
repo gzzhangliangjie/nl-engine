@@ -30,10 +30,15 @@
 #include "nl/core/input.hpp"
 #include "nl/core/action_map.hpp"
 
+#include <cmath>
 #include <cstdio>
 #include <cstring>
+#include <filesystem>
+#include <fstream>
 #include <string>
 #include <vector>
+
+#include <process.h> // _getpid
 
 namespace {
 
@@ -492,6 +497,124 @@ int runCheck(int argc, char** argv) {
     return 0;
 }
 
+// ---- s10：映射文件 + 运行时重绑定 + 手柄源（M-I5，P8-INPUT-PLAN §7.2）----
+// 锚：JSON 全量校验装载（坏文件不动 map）/ 手柄按钮-轴两源经 ActionMap 解析 /
+// rebind 生效点 = 下一次 update（Carrot 冻结语义的有意偏离，逐位锚钉死）。
+void selftestActionsFile() {
+    std::printf("[actions-file]\n");
+    namespace fs = std::filesystem;
+
+    // 写临时映射文件（手柄 A=0 → fire(Bool)；左摇杆X → steer(Float)；组合 sets）
+    const fs::path dir = fs::temp_directory_path() /
+                         ("nl-input-actions-" + std::to_string(_getpid()));
+    fs::create_directories(dir);
+    const fs::path file = dir / "drive.actions.json";
+    {
+        std::ofstream f(file, std::ios::binary);
+        f << "{\n"
+          << "  \"sets\": [\"driving\"],\n"
+          << "  \"actions\": [\n"
+          << "    {\"name\": \"fire\", \"type\": \"bool\", \"sets\": [\"driving\"],\n"
+          << "     \"binds\": [{\"src\": \"pad\", \"id\": 0}]},\n"
+          << "    {\"name\": \"steer\", \"type\": \"float\", \"sets\": [\"driving\"],\n"
+          << "     \"binds\": [{\"src\": \"padAxis\", \"id\": 0, \"scale\": 1.0}]},\n"
+          << "    {\"name\": \"throttle\", \"type\": \"float\",\n"
+          << "     \"binds\": [{\"src\": \"key\", \"id\": 87, \"scale\": 1.0}]}\n"
+          << "  ]\n"
+          << "}\n";
+    }
+
+    // 正向：装载 + 组开关 + 手柄两源解析
+    {
+        nl::core::ActionMap map;
+        std::string err;
+        check(map.loadFromFile(file.string().c_str(), err), "file: load ok");
+        const auto fire = map.find("fire");
+        const auto steer = map.find("steer");
+        const auto throttle = map.find("throttle");
+        check(fire != nl::core::ActionMap::kInvalidAction, "file: fire defined");
+        check(steer != nl::core::ActionMap::kInvalidAction, "file: steer defined");
+        check(throttle != nl::core::ActionMap::kInvalidAction, "file: throttle defined");
+        check(map.type(fire) == nl::core::ActionMap::Type::Bool, "file: fire is Bool");
+        check(map.type(steer) == nl::core::ActionMap::Type::Float, "file: steer is Float");
+
+        const auto driving = map.findSet("driving");
+        check(driving != nl::core::ActionMap::kInvalidSet, "file: driving set defined");
+        map.setActive(driving, true);
+
+        nl::core::InputState in;
+        in.feedGamepadButton(0, true);      // A 按下 → fire 真（Bool 源）
+        in.feedGamepadAxis(0, -0.5f);       // 左摇杆 X = -0.5 → steer = -0.5（轴源带 scale）
+        in.feedKey(87, true);               // W → throttle = +1（键源）
+        map.update(in);
+        check(map.boolValue(fire) && map.boolJustPressed(fire), "file: pad button -> fire pressed");
+        check(std::fabs(map.floatValue(steer) + 0.5f) < 1e-6f, "file: pad axis -> steer -0.5");
+        check(std::fabs(map.floatValue(throttle) - 1.0f) < 1e-6f, "file: key -> throttle +1");
+
+        // 组关停 = 清零（M-I1 语义在文件装载面同样成立）
+        map.setActive(driving, false);
+        in.endFrame();
+        in.feedGamepadButton(0, true);
+        map.update(in);
+        check(!map.boolValue(fire) && !map.boolJustPressed(fire), "file: set-off clears fire");
+    }
+
+    // 负向：坏 src / 坏 type / 引用未声明组 —— map 不动（fail-closed 口径）
+    {
+        nl::core::ActionMap map;
+        std::string err;
+        const fs::path bad1 = dir / "bad-src.json";
+        { std::ofstream f(bad1, std::ios::binary); f << "{\"actions\":[{\"name\":\"x\",\"type\":\"bool\",\"binds\":[{\"src\":\"warp\",\"id\":1}]}]}"; }
+        check(!map.loadFromFile(bad1.string().c_str(), err) && err.find("unknown src") != std::string::npos,
+              "file: unknown src rejected with reason");
+        const fs::path bad2 = dir / "bad-set.json";
+        { std::ofstream f(bad2, std::ios::binary); f << "{\"sets\":[\"a\"],\"actions\":[{\"name\":\"x\",\"type\":\"bool\",\"sets\":[\"b\"],\"binds\":[{\"src\":\"key\",\"id\":1}]}]}"; }
+        check(!map.loadFromFile(bad2.string().c_str(), err) && err.find("unknown set") != std::string::npos,
+              "file: unknown set reference rejected");
+        const auto none = map.find("x");
+        check(none == nl::core::ActionMap::kInvalidAction, "file: failed load leaves map untouched");
+    }
+
+    // rebind：生效点 = 下一次 update（throttle W→S 改绑后值翻符号）
+    {
+        nl::core::ActionMap map;
+        const nl::core::DrivingActions d = nl::core::buildDrivingActionMap(map);
+        nl::core::InputState in;
+        in.feedKey(87, true);
+        map.update(in);
+        check(std::fabs(map.floatValue(d.throttle) - 1.0f) < 1e-6f, "rebind: pre W=+1");
+
+        nl::core::ActionMap::Binding b;
+        b.source = nl::core::ActionMap::Source::Key;
+        b.index = 83;            // S
+        b.scale = 1.0f;
+        std::vector<nl::core::ActionMap::Binding> binds{b};
+        check(map.rebind(d.throttle, binds), "rebind: replace ok");
+        check(std::fabs(map.floatValue(d.throttle) - 1.0f) < 1e-6f, "rebind: frozen until next update");
+        in.endFrame();
+        in.feedKey(87, false);
+        in.feedKey(83, true);
+        map.update(in);
+        check(std::fabs(map.floatValue(d.throttle) - 1.0f) < 1e-6f, "rebind: S now drives throttle");
+    }
+
+    // 手柄直查防御面（越界按钮/轴 = false/0 不崩）
+    {
+        nl::core::InputState in;
+        in.feedGamepadButton(999, true);
+        in.feedGamepadAxis(999, 1.0f);
+        check(!in.gamepadIsDown(999) && in.gamepadAxis(999) == 0.0f && !in.gamepadJustPressed(0),
+              "gamepad: oob feed no-op, queries defensive");
+        in.feedGamepadButton(3, true);
+        check(in.gamepadIsDown(3) && in.gamepadJustPressed(3), "gamepad: Y(3) down+pressed");
+        in.endFrame();
+        check(in.gamepadIsDown(3) && !in.gamepadJustPressed(3), "gamepad: edge cleared by endFrame");
+    }
+
+    std::error_code ec;
+    fs::remove_all(dir, ec);
+}
+
 int runSelftest(int argc, char** argv) {
     static const Section sections[] = {
         {"edges",       selftestEdges},
@@ -503,6 +626,7 @@ int runSelftest(int argc, char** argv) {
         {"determinism", selftestDeterminism},
         {"actions",     selftestActions},
         {"actions-det", selftestActionsDet},
+        {"actions-file", selftestActionsFile},
     };
     const char* only = (argc >= 1) ? argv[0] : nullptr;
     bool ranAny = false;
@@ -513,14 +637,14 @@ int runSelftest(int argc, char** argv) {
     }
     if (!ranAny) {
         std::printf("ERROR: unknown selftest section '%s'\n", only ? only : "");
-        std::printf("usage: input-tools selftest [edges|combos|repeat|mouse|oob|mods|determinism|actions|actions-det]\n");
+        std::printf("usage: input-tools selftest [edges|combos|repeat|mouse|oob|mods|determinism|actions|actions-det|actions-file]\n");
         return 2;
     }
     if (g_failures != 0) {
         std::printf("selftest FAIL (%d failure(s))\n", g_failures);
         return 1;
     }
-    std::printf("selftest PASS (9 sections)\n");
+    std::printf("selftest PASS (%zu sections)\n", sizeof(sections) / sizeof(sections[0]));
     return 0;
 }
 
