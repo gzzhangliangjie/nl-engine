@@ -103,3 +103,16 @@ set_tests_properties(d2-drive-check PROPERTIES
     PASS_REGULAR_EXPRESSION "phys-d2 drive-check: PASS")
 add_test(NAME d2-drive-negative COMMAND phys-tools drive-trace --frames 0)
 set_tests_properties(d2-drive-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- M-PQ0: general physics query API (A-class tool acceptance) ----
+add_test(NAME pq0-query-trace COMMAND phys-tools query-trace
+         --out ${CMAKE_CURRENT_BINARY_DIR}/phys-pq0-query.tsv)
+set_tests_properties(pq0-query-trace PROPERTIES
+    PASS_REGULAR_EXPRESSION "wrote .*phys-pq0-query\.tsv")
+add_test(NAME pq0-query-check
+         COMMAND phys-tools query-check ${CMAKE_CURRENT_BINARY_DIR}/phys-pq0-query.tsv)
+set_tests_properties(pq0-query-check PROPERTIES
+    DEPENDS pq0-query-trace
+    PASS_REGULAR_EXPRESSION "phys-pq0 query-check: PASS")
+add_test(NAME pq0-query-negative COMMAND phys-tools query-trace --out)
+set_tests_properties(pq0-query-negative PROPERTIES WILL_FAIL TRUE)
