@@ -17,6 +17,9 @@
 
 #include "nl/physics/query.hpp"
 #include "nl/physics/World.hpp"  // bootstrap(), layers::*, LayerMatrix
+#include "QueryHost.hpp"         // M-PQ1: erased live-system bridge
+
+#include <unordered_map>
 
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -199,7 +202,8 @@ FixtureBody fixture(int slot) {
 } // namespace
 
 // ---------------------------------------------------------------------------
-// QueryScene::Impl
+// QueryScene::Impl (M-PQ1: dual mode -- self-built fixture system OR live
+// DebugScene system via QueryHost; the active system is resolved on call)
 // ---------------------------------------------------------------------------
 struct QueryScene::Impl {
     // Declaration order = reverse destruction order: filters hold no refs here
@@ -212,6 +216,23 @@ struct QueryScene::Impl {
     std::vector<std::uint64_t> owners;
     bool built = false;
 
+    // ---- M-PQ1 attach mode ----
+    QueryHost* host = nullptr;           // not owned; caller keeps scene alive
+    JPH::PhysicsSystem* liveSystem = nullptr;
+
+    // ---- M-PQ1 dynamic body registration (both modes) ----
+    struct RegBody { JPH::BodyID id; std::uint64_t owner; bool alive; };
+    std::unordered_map<int, RegBody> registered;
+    int nextRegHandle = 1;
+
+    // Active system for queries/registration: the live one in attach mode,
+    // the self-built fixture one otherwise. nullptr until ready.
+    JPH::PhysicsSystem* activeSystem() const {
+        if (liveSystem) return liveSystem;
+        return built ? const_cast<JPH::PhysicsSystem*>(&physicsSystem) : nullptr;
+    }
+    bool readyFlag() const { return liveSystem != nullptr || built; }
+
     std::uint32_t bodyIdBySlot(int slot) const {
         return (slot >= 0 && static_cast<std::size_t>(slot) < bodyIds.size())
              ? bodyIds[static_cast<std::size_t>(slot)] : 0u;
@@ -221,13 +242,16 @@ struct QueryScene::Impl {
              ? owners[static_cast<std::size_t>(slot)] : 0ull;
     }
 
-    // Fill the common part of a hit from a BodyID.
+    // Fill the common part of a hit from a BodyID. Reads through the ACTIVE
+    // system: in attach mode user data / layers live in the scene's world.
     void decorate(QueryHit* out, const JPH::BodyID& id,
                   std::uint32_t subShapeId, const nl::math::Vec3& fallbackNormal) const {
+        JPH::PhysicsSystem* sys = activeSystem();
+        if (!sys) return;
         out->bodyId     = id.GetIndexAndSequenceNumber();
         out->subShapeId = subShapeId;
-        out->owner      = physicsSystem.GetBodyInterface().GetUserData(id);
-        JPH::BodyLockRead lock(physicsSystem.GetBodyLockInterface(), id);
+        out->owner      = sys->GetBodyInterface().GetUserData(id);
+        JPH::BodyLockRead lock(sys->GetBodyLockInterface(), id);
         if (lock.Succeeded()) {
             out->layer = static_cast<std::uint32_t>(lock.GetBody().GetObjectLayer());
         }
@@ -270,10 +294,100 @@ bool QueryScene::build(std::string* err) {
     return true;
 }
 
-bool QueryScene::ready() const { return impl_->built; }
+bool QueryScene::ready() const { return impl_->readyFlag(); }
 std::uint32_t QueryScene::bodyCount() const {
     return static_cast<std::uint32_t>(impl_->bodyIds.size());
 }
+
+// ---------------------------------------------------------------------------
+// M-PQ1: attach / detach + dynamic body registration
+// ---------------------------------------------------------------------------
+bool QueryScene::attach(QueryHost* host, std::string* err) {
+    if (impl_->built) {
+        if (err) *err = "attach: fixture already built in this QueryScene";
+        return false;
+    }
+    if (!host) {
+        if (err) *err = "attach: null host (DebugScene::queryHost() before build?)";
+        return false;
+    }
+    void* sys = host->system();
+    if (!sys) {
+        if (err) *err = "attach: host has no live system (DebugScene not built / scenario 1)";
+        return false;
+    }
+    impl_->host = host;
+    impl_->liveSystem = static_cast<JPH::PhysicsSystem*>(sys);
+    return true;
+}
+
+void QueryScene::detach() {
+    impl_->host = nullptr;
+    impl_->liveSystem = nullptr;
+    // Registered bodies in attach mode live in the SHARED scene world -- they
+    // must be removed there before dropping the reference, otherwise the live
+    // scene keeps query-marker bodies nobody owns.
+    JPH::BodyInterface& bi = impl_->liveSystem->GetBodyInterface();
+    for (auto& kv : impl_->registered) {
+        if (!kv.second.alive) continue;
+        bi.RemoveBody(kv.second.id);
+        bi.DestroyBody(kv.second.id);
+        kv.second.alive = false;
+    }
+    impl_->registered.clear();
+}
+
+int QueryScene::registerBody(const ShapeDesc& shape, const float pos[3],
+                             const float quat[4], std::uint32_t layer,
+                             std::uint64_t owner, std::string* err) {
+    JPH::PhysicsSystem* sys = impl_->activeSystem();
+    if (!sys) {
+        if (err) *err = "registerBody: no active system (build or attach first)";
+        return -1;
+    }
+    if (layer >= kLayerCount) {
+        if (err) *err = "registerBody: layer out of range";
+        return -1;
+    }
+    if (!validDims(shape, err)) return -1;
+
+    JPH::BodyInterface& bi = sys->GetBodyInterface();
+    JPH::BodyCreationSettings settings(
+        makeShape(shape),
+        JPH::RVec3(JPH::Real(pos[0]), JPH::Real(pos[1]), JPH::Real(pos[2])),
+        JPH::Quat(quat[0], quat[1], quat[2], quat[3]),
+        JPH::EMotionType::Static, static_cast<JPH::ObjectLayer>(layer));
+    JPH::Body* body = bi.CreateBody(settings);
+    if (!body) {
+        if (err) *err = "registerBody: CreateBody failed";
+        return -1;
+    }
+    const JPH::BodyID id = body->GetID();
+    bi.AddBody(id, JPH::EActivation::DontActivate);
+    bi.SetUserData(id, owner);
+
+    const int handle = impl_->nextRegHandle++;
+    impl_->registered[handle] = QueryScene::Impl::RegBody{ id, owner, true };
+    if (!impl_->built) {
+        // fixture mode: this is our own world, optimize once per batch is fine
+        // (live worlds must NOT be re-optimized behind the simulator's back).
+        sys->OptimizeBroadPhase();
+    }
+    return handle;
+}
+
+bool QueryScene::unregisterBody(int handle) {
+    auto it = impl_->registered.find(handle);
+    if (it == impl_->registered.end() || !it->second.alive) return false;
+    JPH::PhysicsSystem* sys = impl_->activeSystem();
+    if (!sys) return false;
+    JPH::BodyInterface& bi = sys->GetBodyInterface();
+    bi.RemoveBody(it->second.id);
+    bi.DestroyBody(it->second.id);
+    it->second.alive = false;
+    return true;
+}
+
 std::uint32_t QueryScene::bodyIdBySlot(int slot) const { return impl_->bodyIdBySlot(slot); }
 std::uint64_t QueryScene::ownerBySlot(int slot) const { return impl_->ownerBySlot(slot); }
 
@@ -282,14 +396,15 @@ std::uint64_t QueryScene::ownerBySlot(int slot) const { return impl_->ownerBySlo
 // ---------------------------------------------------------------------------
 QueryHit QueryScene::raycast(const RayQuery& q) const {
     QueryHit out;
-    if (!impl_->built || !validateRayQuery(q, nullptr)) return out;
+    JPH::PhysicsSystem* sys = impl_->activeSystem();
+    if (!sys || !validateRayQuery(q, nullptr)) return out;
 
     const JPH::RRayCast ray(toJolt(q.origin), toJoltV3(q.direction) * q.maxT);
     QueryLayerFilter layerFilter(q.filter.layerMask);
     QueryBodyFilter  bodyFilter(q.filter.ignoreBodyIds);
     JPH::RayCastResult hit;
 
-    const bool found = impl_->physicsSystem.GetNarrowPhaseQuery().CastRay(
+    const bool found = sys->GetNarrowPhaseQuery().CastRay(
         ray, hit, JPH::BroadPhaseLayerFilter(), layerFilter, bodyFilter);
     if (!found) return out;
 
@@ -299,7 +414,7 @@ QueryHit QueryScene::raycast(const RayQuery& q) const {
     const JPH::RVec3 hp = ray.GetPointOnRay(hit.mFraction);
     out.point = fromJolt(hp);
 
-    JPH::BodyLockRead lock(impl_->physicsSystem.GetBodyLockInterface(), hit.mBodyID);
+    JPH::BodyLockRead lock(sys->GetBodyLockInterface(), hit.mBodyID);
     if (lock.Succeeded()) {
         const JPH::Vec3 n = lock.GetBody().GetWorldSpaceSurfaceNormal(
             hit.mSubShapeID2, hp);
@@ -314,7 +429,8 @@ QueryHit QueryScene::raycast(const RayQuery& q) const {
 // ---------------------------------------------------------------------------
 QueryHit QueryScene::sweep(const SweepQuery& q) const {
     QueryHit out;
-    if (!impl_->built || !validateSweepQuery(q, nullptr)) return out;
+    JPH::PhysicsSystem* sys = impl_->activeSystem();
+    if (!sys || !validateSweepQuery(q, nullptr)) return out;
 
     JPH::ShapeRefC shape = makeShape(q.shape);
     const JPH::RMat44 start = JPH::RMat44::sRotationTranslation(
@@ -328,7 +444,7 @@ QueryHit QueryScene::sweep(const SweepQuery& q) const {
     JPH::ClosestHitCollisionCollector<JPH::CastShapeCollector> collector;
     QueryLayerFilter layerFilter(q.filter.layerMask);
     QueryBodyFilter  bodyFilter(q.filter.ignoreBodyIds);
-    impl_->physicsSystem.GetNarrowPhaseQuery().CastShape(
+    sys->GetNarrowPhaseQuery().CastShape(
         cast, settings, JPH::RVec3::sZero(), collector,
         JPH::BroadPhaseLayerFilter(), layerFilter, bodyFilter);
     if (!collector.HadHit()) return out;
@@ -349,7 +465,8 @@ QueryHit QueryScene::sweep(const SweepQuery& q) const {
 std::vector<QueryHit> QueryScene::overlap(const OverlapQuery& q,
                                           std::size_t maxHits) const {
     std::vector<QueryHit> out;
-    if (!impl_->built || maxHits == 0 || !validateOverlapQuery(q, nullptr)) return out;
+    JPH::PhysicsSystem* sys = impl_->activeSystem();
+    if (!sys || maxHits == 0 || !validateOverlapQuery(q, nullptr)) return out;
 
     JPH::ShapeRefC shape = makeShape(q.shape);
     const JPH::RMat44 transform = JPH::RMat44::sRotationTranslation(
@@ -358,7 +475,7 @@ std::vector<QueryHit> QueryScene::overlap(const OverlapQuery& q,
     JPH::AllHitCollisionCollector<JPH::CollideShapeCollector> collector;
     QueryLayerFilter layerFilter(q.filter.layerMask);
     QueryBodyFilter  bodyFilter(q.filter.ignoreBodyIds);
-    impl_->physicsSystem.GetNarrowPhaseQuery().CollideShape(
+    sys->GetNarrowPhaseQuery().CollideShape(
         shape.GetPtr(), JPH::Vec3::sReplicate(1.0f), transform, settings,
         JPH::RVec3::sZero(), collector,
         JPH::BroadPhaseLayerFilter(), layerFilter, bodyFilter);

@@ -19,6 +19,7 @@
 #include <Jolt/Jolt.h> // must be first Jolt header
 
 #include "nl/physics/World.hpp"
+#include "QueryHost.hpp"   // M-PQ1: DebugScene::Impl implements QueryHost
 
 #include <Jolt/RegisterTypes.h>
 #include <Jolt/Core/Factory.h>
@@ -1276,12 +1277,18 @@ public:
 };
 } // namespace
 
-struct DebugScene::Impl {
+// M-PQ1: Impl doubles as the query bridge -- QueryScene::attach() casts the
+// erased system() pointer back to JPH::PhysicsSystem* inside Query.cpp.
+struct DebugScene::Impl : QueryHost {
     std::uint32_t totalBodies = 0;
     std::string error;
     int scenario = 0;
     bool valid = false;
 
+    // QueryHost: live system exposed only after a successful build().
+    // scenario 1 (CharacterHarness) runs its own system and leaves this one
+    // uninitialized, so live attach stays scenario-0/2-only for now (PQ1-PLAN §5).
+    void* system() override { return valid ? &physicsSystem : nullptr; }
     // Jolt 生命周期对象（声明顺序 = 构造顺序；析构逆序，保证 filters 与 matrix
     // 长于 physicsSystem，与 simulateDrop 同纪律）。
     JPH::TempAllocatorImpl tempAllocator{10 * 1024 * 1024};
@@ -1624,6 +1631,11 @@ DebugLines DebugScene::extractLines() {
 }
 
 const char* DebugScene::lastError() const { return impl_ ? impl_->error.c_str() : "not built"; }
+
+// M-PQ1: opaque query host (nullptr before build; see Impl::system()).
+QueryHost* DebugScene::queryHost() {
+    return impl_ ? impl_.get() : nullptr;
+}
 std::uint32_t DebugScene::bodyCount() const {
     if (!impl_) return 0;
     if (impl_->charH) return impl_->charH->physicsSystem.GetNumBodies();

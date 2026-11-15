@@ -3448,6 +3448,9 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 只持值对象。仅 --physics-debug 时 build；build 失败直接退出 1（绝不静默回退到
     // 无叠加层——否则「以为在看物理」是假证据）。
     nl::physics::DebugScene physicsScene;
+    nl::physics::QueryScene scriptQueryLive;   // M-PQ1：live 查询宿主（声明序
+    //   = 析构序：本对象先于 physicsScene 析构，S15 UAF 纪律；注入/解绑见
+    //   script 装载块与收尾块）。
     if (o.physicsDebug) {
         std::string perr;
         if (!physicsScene.build(o.physicsScenario, o.physicsSeed, &perr)) {
@@ -3794,6 +3797,18 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
         nl::script::timeSetClock(&gameClock);
         if (o.physicsDebug && o.physicsScenario == 2)
             nl::script::driveSetScene(&physicsScene);
+        // M-PQ1：live 查询注入（scenario 2 训练场 + 脚本同时启用时，脚本 query*
+        // 走现役 DebugScene 而非静态夹具）。scriptQueryLive 声明在 physicsScene
+        // 之后（析构先于它，S15 纪律）；收尾解绑在 driveSetScene(nullptr) 旁。
+        if (o.physicsDebug && o.physicsScenario == 2) {
+            std::string pqErr;
+            if (scriptQueryLive.attach(physicsScene.queryHost(), &pqErr)) {
+                nl::script::querySetScene(&scriptQueryLive);
+                nl::core::log::infoCh("viewer", "script: querySetScene -> live DebugScene (M-PQ1)");
+            } else {
+                nl::core::log::warnCh("viewer", "script: live query attach failed: ", pqErr);
+            }
+        }
         const auto lr2 = nl::script::ScriptHost::get().loadScript(
             fs::absolute(dll).string(), typeName);
         if (!lr2.ok) {
@@ -5202,6 +5217,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
     // 兜底口径）→ 卸脚本（内部先清 tickFn_ / 命令 thunk）→ 析构 Vm。
     if (scriptLoaded) {
         nl::script::driveSetScene(nullptr);
+        nl::script::querySetScene(nullptr);   // M-PQ1：先解绑再析构（S15 纪律）
+        scriptQueryLive.detach();
         nl::script::timeSetClock(nullptr);
         const auto ur = nl::script::ScriptHost::get().unloadScript();
         if (!ur.ok)

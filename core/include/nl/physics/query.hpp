@@ -20,6 +20,11 @@
 
 namespace nl::physics {
 
+// M-PQ1: opaque live-system bridge (defined in core/src/physics/QueryHost.hpp,
+// handed out by DebugScene::queryHost()). Forward-declared here keeps this
+// public header Jolt-free and independent of World.hpp.
+struct QueryHost;
+
 // bit i == objects on layers::* value i may be hit. Default: all 4 layers.
 struct QueryFilter {
     std::uint32_t       layerMask = 0x0000000Fu;
@@ -69,10 +74,9 @@ struct QueryHit {
     std::uint64_t  owner      = 0;     // engine-side id stored in Jolt userData
 };
 
-// Fresh deterministic query world. NOT the engine's live DebugScene world:
-// sharing that instance is a separate milestone (M-PQ1).
-//
-// Fixture layout (all static, built by build()):
+// M-PQ0: fresh deterministic query world (fixture layout below).
+// M-PQ1: attach() re-points the same query families at a LIVE DebugScene
+// (see PQ1-PLAN.md). Fixture layout (all static, built by build()):
 //   slot 0 floor   Box(100,1,100) @ (0,-1,0)      layer kFloor   owner 'FLOOR'
 //   slot 1 boxA    Box(1,1,1)     @ (0, 1, 5)      layer kDefault owner 'BOXA'
 //   slot 2 boxB    Box(1,1,1)     @ (0, 1,10)      layer kDebris  owner 'BOXB'
@@ -85,10 +89,31 @@ public:
     QueryScene(const QueryScene&) = delete;
     QueryScene& operator=(const QueryScene&) = delete;
 
+    // ---- mode A (M-PQ0): deterministic fixture world ----
     bool build(std::string* err);
+
+    // ---- mode B (M-PQ1): attach to a live DebugScene ----
+    // host = DebugScene::queryHost(). This object does NOT own the scene;
+    // the attached QueryScene must be destroyed BEFORE the DebugScene it
+    // reads (S15 UAF discipline). Queries go through the live narrowphase
+    // with the caller's QueryFilter (mask/ignore) -- the simulation-side
+    // layer matrix is orthogonal and untouched. attach() and build() are
+    // mutually exclusive; detach() returns to the idle state.
+    bool   attach(QueryHost* host, std::string* err);
+    void   detach();
+
+    // ---- M-PQ1: dynamic body registration (both modes) ----
+    // Static body into the ACTIVE system (self-built in fixture mode, shared
+    // live world in attach mode -- a real collision participant; pick layers
+    // accordingly). Returns handle >= 0, -1 on failure (err set). Tombstone
+    // semantics: handles are never reused.
+    int  registerBody(const ShapeDesc& shape, const float pos[3], const float quat[4],
+                      std::uint32_t layer, std::uint64_t owner, std::string* err);
+    bool unregisterBody(int handle);
+
     bool ready() const;
     std::uint32_t bodyCount() const;
-    std::uint32_t bodyIdBySlot(int slot) const; // 0 on invalid slot
+    std::uint32_t bodyIdBySlot(int slot) const; // 0 on invalid slot (fixture-only ids)
     std::uint64_t ownerBySlot(int slot) const;
 
     QueryHit         raycast(const RayQuery& q) const;

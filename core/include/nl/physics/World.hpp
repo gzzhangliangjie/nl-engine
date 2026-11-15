@@ -296,6 +296,10 @@ struct DebugLines {
     std::uint32_t vertexCount = 0;        // LINE_LIST：每 2 顶点为一段线
 };
 
+// M-PQ1: opaque query bridge (defined in core/src/physics/QueryHost.hpp;
+// Jolt-free forward declaration keeps this public header clean).
+struct QueryHost;
+
 class DebugScene {
 public:
     DebugScene();
@@ -340,6 +344,15 @@ public:
     // 未用槽返回 false。
     bool vehicleFullPose(int slot, float pos[3], float quat[4], float vel[3]) const;
     int  activeVehicleCount() const;
+
+    // ---- M-PQ1: live query bridge (see PQ1-PLAN.md) ----
+    // Returns an opaque query host wrapping this scene's physics system, for
+    // QueryScene::attach(). Jolt-free: QueryHost is forward-declared at
+    // namespace level (defined in core/src/physics/QueryHost.hpp), the pointer
+    // stays valid for the lifetime of this DebugScene. nullptr before build()
+    // succeeds. The attached QueryScene must die BEFORE this DebugScene
+    // (caller's duty).
+    QueryHost* queryHost();
 
 private:
     struct Impl;
