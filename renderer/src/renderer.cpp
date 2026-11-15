@@ -363,6 +363,15 @@ bool Renderer::rmlElementGetText(int handle, const char* elId, const char** outT
     return impl_->backend && impl_->backend->rmlElementGetText(handle, elId, outText);
 }
 
+// ---- M-SP1-d：sprite atlas <-> RmlUi 共享通道（backend 转发；未启用恒失败）----
+
+bool Renderer::rmlRegisterExternalTexture(std::uintptr_t key, nvrhi::ITexture* tex) {
+    return impl_->backend && impl_->backend->rmlRegisterExternalTexture(key, tex);
+}
+nvrhi::ITexture* Renderer::spriteAtlasTexture(std::uint32_t textureId) {
+    return impl_->backend ? impl_->backend->spriteAtlasTexture(textureId) : nullptr;
+}
+
 bool Renderer::setLodLevel(int level) {
     if (!impl_->backend) return false;
     if (!impl_->backend->setLodLevel(level, impl_->error)) return false;

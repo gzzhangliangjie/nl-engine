@@ -46,3 +46,35 @@ body {
 
 .btn:hover  { background-color: #4a83e8; }
 .btn:active { background-color: #2657b4; }
+
+/* M-SP1-d：<sprite> 自定义 element（atlas 纹理共享自 Sprite2DPass）。
+ * overflow: hidden 启用 RmlUi scissor 通道（SpriteElement 顶点被裁进卡内）。 */
+#sprites-title {
+    font-size: 13dp;
+    color: #e8eaf0;
+    margin-top: 10dp;
+    margin-bottom: 6dp;
+}
+
+.sprite-row {
+    display: block;
+    overflow: hidden;
+    width: 200dp;
+    height: 44dp;
+    background-color: #0d1018cc;
+    border-radius: 4dp;
+    padding: 4dp;
+}
+
+.sprite-cell {
+    display: inline-block;
+    width: 44dp;
+    height: 44dp;
+    margin-right: 4dp;
+}
+
+#sprites-note {
+    font-size: 11dp;
+    color: #7a8398;
+    margin-top: 6dp;
+}

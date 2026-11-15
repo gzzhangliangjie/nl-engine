@@ -382,6 +382,13 @@ public:
     bool rmlElementGetText(int handle, const char* elId, const char** outText) override {
         return rmlui_.elementGetText(handle, elId, outText);
     }
+    // M-SP1-d：sprite atlas 共享进 RmlUi + atlas 纹理取用（转发 pass 成员）。
+    bool rmlRegisterExternalTexture(std::uintptr_t key, nvrhi::ITexture* tex) override {
+        return rmlui_.registerExternalTexture(key, tex);
+    }
+    nvrhi::ITexture* spriteAtlasTexture(std::uint32_t textureId) override {
+        return sprite2d_.atlasTexture(textureId);
+    }
 
 private:
     // ---- M8.2 t0 段一：beginFrame = 回读消费只能发生在这里 ----
@@ -464,6 +471,7 @@ private:
                 }
             }
             sprite2d_.build(sprite2d->sprites, sprite2d->spriteCount,
+                            sprite2d->atlases, sprite2d->atlasCount,
                             sprite2d->displayWidth, sprite2d->displayHeight,
                             sprite2d->cameraX, sprite2d->cameraY,
                             sprite2d->pixelsPerUnit);

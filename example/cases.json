@@ -15590,6 +15590,86 @@
      "cwd": "{root}"
     }
    ]
+  },
+  {
+   "id": "sprite-m1",
+   "label": "M-SP1",
+   "name": "世界空间 2D 精灵 demo（多图集 + 逐桶 draw + RmlUi 桥接）",
+   "tag": "m-sp1",
+   "date": "2026-11-15",
+   "summary": "波 1 sprite 轨第二里程碑（B 类主线穿插）。Sprite2DPass 逐桶换 binding set（CB 16B→32B 加 baseIndex，双后端 SV_InstanceID 语义统一，不用 setStartInstanceLocation）+ 多图集注册（帧内幂等重推、pending 帧列表上传、textureId 0 内置兜底）+ 预乘 alpha 端到端（与 RmlUi 管线同语义）+ <sprite> 自定义 element 桥接（atlas 纹理账本共享 + scissor 走 RmlUi 通道）+ --sprite-demo 旗标（帧号纯函数数据，缺省关零漂）。kStage 不 bump，既有 17 对 HUD 基线零波及。",
+   "acceptance": [
+    "双后端 BUILD OK；sprite-tools 既有 9 条用例零漂",
+    "--sprite-demo 渲染卡 image 双后端基线锁定（tile 排/敌人 flipbook/环绕小球/半透明 tint 层四层齐）",
+    "缺省不传旗标时 renderFrame 尾参 nullptr，旧基线逐字节不动",
+    "demo.rml sprite 卡经 RmlUi 账本共享 atlas 纹理渲染"
+   ],
+   "exe": {
+    "dx12": "build/DX12/viewer.exe",
+    "vulkan": "build/VULKAN/viewer.exe"
+   },
+   "cases": [
+    {
+     "id": "sprite-normal",
+     "name": "sprite demo（runNormal 主循环）",
+     "kind": "image",
+     "note": "多图集（id1 敌人+地形 128x64 / id2 道具 64x64）逐桶 draw：8 tile 底排（layer0）+ 敌人 flipbook 与 10 环绕小球（layer1，id1/id2 同层强制切桶）+ 5 半透明 tint（layer2）。帧号纯函数保确定性。",
+     "baselines": {
+      "dx12": "example/sprite-m1/normal-dx12.png",
+      "vulkan": "example/sprite-m1/normal-vulkan.png"
+     },
+     "args": [
+      "--sprite-demo",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "35",
+      "--pitch",
+      "12",
+      "--dist",
+      "16",
+      "--cull",
+      "back"
+     ],
+     "command": "viewer.exe --sprite-demo --screenshot <out.png> --frames 8 --size 960x540",
+     "script": "example/sprite-m1/run.bat normal"
+    },
+    {
+     "id": "sprite-scene",
+     "name": "sprite demo（scene 模式最小喂数）",
+     "kind": "image",
+     "note": "runScene 路径同套确定性数据；验证 scene 模式 renderFrame 第 6 参接线与 sprite pass 次序（RmlUi 之后、HUD 之前）。",
+     "baselines": {
+      "dx12": "example/sprite-m1/scene-dx12.png",
+      "vulkan": "example/sprite-m1/scene-vulkan.png"
+     },
+     "args": [
+      "--mode",
+      "scene",
+      "--scene",
+      "{root}/example/gl2/gl2-audio.scene",
+      "--sprite-demo",
+      "--no-hud",
+      "--screenshot",
+      "{out}",
+      "--frames",
+      "8",
+      "--size",
+      "960x540",
+      "--yaw",
+      "12",
+      "--pitch",
+      "9"
+     ],
+     "command": "viewer.exe --mode scene --scene ... --sprite-demo --screenshot <out.png>",
+     "script": "example/sprite-m1/run.bat scene"
+    }
+   ]
   }
  ]
 }

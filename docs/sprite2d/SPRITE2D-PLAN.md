@@ -119,7 +119,8 @@ RmlUi 视觉卡仍按本冻结口径后置到 **M-SP1**，是否提前拉进 M-S
 `docs/sprite2d/SPRITE2D-PLAN.md` + `SPRITE2D-TOOLS-GUIDE.md`、
 `docs/MILESTONES.md` 四栏、tag `sprite2d-sp0`。
 
-**后置到 M-SP1（非本轮交付）**：`--sprite-demo` 旗标、**渲染截图**双后端 PNG
+**后置到 M-SP1（2026-11-15 已全部交付，用户拍板「全四子项一次做 / kStage 不 bump」；
+实况见 §9 与 MILESTONES M-SP1 四栏）**：`--sprite-demo` 旗标、**渲染截图**双后端 PNG
 基线、多图集注册 + 每桶换 binding set 的 draw、RmlUi element/scissor 桥接。
 
 ## 8. 实施记录（2026-11-15，不构成新拍板）
@@ -143,3 +144,42 @@ RmlUi 视觉卡仍按本冻结口径后置到 **M-SP1**，是否提前拉进 M-S
 6. **CMake**：`sprite2d.slang` 命中 `_ENTRIES_DEFAULT`（`vsMain|vs` + `psMain|ps`），
    `file(GLOB *.slang)` 自动收集；`build-m0.2.bat` 每次都跑 `cmake -S -B`，
    故新 shader 无需手工重新 configure。新增 cpp 必须显式登记进 `nl_renderer`。
+
+## 9. M-SP1 实施记录（2026-11-15，用户拍板「两个都做 M-SP1 先 / 全四子项一次做 / kStage 不 bump」）
+
+**逐桶 draw 的跨后端解法（核心设计）**：不用 `setStartInstanceLocation`（DX12
+SV_InstanceID 不含 firstInstance、Vulkan gl_InstanceIndex 含——M-SP0 注记的静默
+分歧），改为**每桶写 volatile CB 带 `g_baseIndex`**（CB 16B→32B），VS 索引
+`g_sprites[iid + g_baseIndex]`——SV_InstanceID 在两后端都从 0 起，一份 shader
+双后端逐语义一致。volatile CB `maxVersions` 提到 64（每桶一版本，桶数超限合并告警）。
+
+**预乘 alpha 统一**：atlas 像素 ingest 时、sprite tint build 时 CPU 侧转预乘，
+blend 改 One/InvSrcAlpha——与 rmlui_backend 同语义，M-SP1-d 纹理共享零转换。
+直通 alpha 语义废止（M-SP0 的 blend 为 SrcAlpha/InvSrcAlpha）。
+
+**多图集注册**：`Sprite2DFrame` 尾部追加 `atlases/atlasCount`（POD 数组，帧内
+幂等重推）；`Sprite2DPass` 内 `unordered_map<TextureId, AtlasEntry>`（tex + set +
+pending），纹理 `CopyDest` 建、pending 像素在 `draw()` 帧列表内上传晋升
+（builtin M-PT2 先例，帧内禁第二 cmd list）。textureId 0 / 未注册 id /
+kInvalidTextureId 全部落内置 4×4 兜底。textureId 语义 = SpriteDesc 原语义。
+
+**RmlUi 桥接（M-SP1-d）**：`Renderer::rmlRegisterExternalTexture(key, tex)` 把
+sprite atlas 纹理挂进 RmlUi texture 账本（key = `kRmlSpriteTexKeyBase + textureId`，
+0 保留白像素兜底）；自定义 `<sprite>` element（`ElementInstancerGeneric`，OnRender
+内 CompileGeometry→RenderGeometry→ReleaseGeometry 每帧零残留）+ demo.rml sprite
+卡（`overflow:hidden` 走既有 SetScissorRegion 通道）。`renderer.hpp` 零 NVRHI
+include 纪律保持：ITexture 只全局层前向声明（**前向声明必须放 nl::renderer 外
+——放里面会变成嵌套 namespace nl::renderer::nvrhi 污染全部子命名空间查找，
+r2 构建实证**）。
+
+**M-SP0 投影语义实测澄清（demo 踩坑）**：`ndc.y = (y + cameraY)*sy + 1`（sy<0），
+world 原点锚屏幕**顶**、y 正方向屏幕**向下**——与注释「y up on screen」直觉相反。
+demo 用 `cameraX = -W/(2·ppu)`、`cameraY = +H/(2·ppu)` 把原点重定位到屏幕中心；
+投影公式本体（M-SP0 冻结）一行未动。
+
+**验收**：双后端 BUILD OK；ctest 176/176 ×2（DX12 首跑 `s1-nmesh-suzanne` 快进程
+stdout 丢失竞态 3 连败——nanite-tools 零改动、手动跑锚齐、VULKAN 同条过、热身后
+稳定过，重跑 176/176 定案，与本轮无关）；`--only sprite-m1` 4/4 新卡 + `--only
+m0.5` 10/10 / `--only water-t3` 4/4 / `--only ecs-e1b` 8/8 旧卡零漂；run.bat
+三路（usage=2 / normal=0 / scene=0）；`server.py --check` exit 0；bat 门禁 0
+violations。cases.json `sprite-m1` 卡（2 条 image，164→165 版本）。

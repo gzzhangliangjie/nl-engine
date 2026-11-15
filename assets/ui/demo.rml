@@ -8,6 +8,14 @@
         <div id="title">NL-Engine · RmlUi M-UI0</div>
         <div id="status">F8 toggles the debugger. Edit ui/demo.rml to see hot reload.</div>
         <div class="btn" id="btnDemo" onclick="ping">Ping (demo doc)</div>
+        <div id="sprites-title">Sprite cards (M-SP1 bridge)</div>
+        <div class="sprite-row">
+            <sprite class="sprite-cell" atlas="1" cell="0" grid-x="4" grid-y="2"/>
+            <sprite class="sprite-cell" atlas="1" cell="1" grid-x="4" grid-y="2"/>
+            <sprite class="sprite-cell" atlas="2" cell="3" grid-x="4" grid-y="4"/>
+            <sprite class="sprite-cell" atlas="2" cell="11" grid-x="4" grid-y="4"/>
+        </div>
+        <div id="sprites-note">Shared atlas textures from Sprite2DPass (premultiplied).</div>
     </div>
 </body>
 </rml>

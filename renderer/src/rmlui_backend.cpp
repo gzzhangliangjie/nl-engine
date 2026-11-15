@@ -141,6 +141,56 @@ void attachEventListeners(Rml::Element* root, UiEventListener& listener) {
         attachEventListeners(root->GetChild(i), listener);
 }
 
+// ---- M-SP1-d：<sprite> 自定义 element（RmlUi 视觉卡桥接）----
+// 世界空间 sprite atlas 在 UI 层的展示通道：texture 账本共享（Renderer::
+// rmlRegisterExternalTexture 把 Sprite2DPass 的 atlas 纹理注册进本 backend 的
+// textures map，key = kRmlSpriteTexKeyBase + textureId），element OnRender 里
+// CompileGeometry -> RenderGeometry -> ReleaseGeometry（每帧重建，demo 规模
+// 个位数 element，账本不留帧间垃圾）。预乘 alpha 与 scissor 全走既有通道：
+// 文档样式给元素加 overflow:hidden 即启用 SetScissorRegion（裁剪 sprite 卡）。
+class SpriteElement final : public Rml::Element {
+public:
+    SpriteElement(const Rml::String& tag) : Rml::Element(tag) {}
+
+    void OnRender() override {
+        Rml::RenderInterface* ri = Rml::GetRenderInterface();
+        if (ri == nullptr) return;
+
+        const int atlas = GetAttribute<int>("atlas", 0);
+        const int cell  = GetAttribute<int>("cell", 0);
+        const int gx = std::max(1, GetAttribute<int>("grid-x", 4));
+        const int gy = std::max(1, GetAttribute<int>("grid-y", 4));
+        const Rml::Vector2f offset = GetAbsoluteOffset(Rml::BoxArea::Content);
+        const Rml::Vector2f size = GetBox().GetSize(Rml::BoxArea::Border);
+        if (size.x <= 0.0f || size.y <= 0.0f) return;
+
+        const int cx = cell % gx, cy = cell / gx;
+        const float u0 = float(cx) / float(gx), u1 = float(cx + 1) / float(gx);
+        const float v0 = float(cy) / float(gy), v1 = float(cy + 1) / float(gy);
+
+        Rml::Vertex v[4];
+        v[0].position = offset;                       v[0].tex_coord = Rml::Vector2f(u0, v0);
+        v[1].position = offset + Rml::Vector2f(size.x, 0.0f); v[1].tex_coord = Rml::Vector2f(u1, v0);
+        v[2].position = offset + size;                v[2].tex_coord = Rml::Vector2f(u1, v1);
+        v[3].position = offset + Rml::Vector2f(0.0f, size.y); v[3].tex_coord = Rml::Vector2f(u0, v1);
+        for (auto& vert : v) vert.colour = Rml::ColourbPremultiplied(255, 255, 255, 255);
+        const int idx[6] = {0, 1, 2, 0, 2, 3};
+
+        // texture 0 = RmlUi 白像素兜底约定；sprite atlas 用高位段 key 避撞。
+        const Rml::TextureHandle tex =
+            kRmlSpriteTexKeyBase + static_cast<std::uintptr_t>(atlas);
+        Rml::CompiledGeometryHandle g =
+            ri->CompileGeometry(Rml::Span<const Rml::Vertex>(v, 4),
+                                Rml::Span<const int>(idx, 6));
+        if (g != Rml::CompiledGeometryHandle{}) {
+            ri->RenderGeometry(g, Rml::Vector2f(0.0f, 0.0f), tex);
+            ri->ReleaseGeometry(g);
+        }
+    }
+};
+
+Rml::ElementInstancerGeneric<SpriteElement> g_spriteInstancer;
+
 } // namespace
 
 // ---- Impl：RmlUi 三接口 + NVRHI 资源 ----
@@ -561,6 +611,10 @@ bool RmlUiBackend::init(nvrhi::IDevice* device, const char* shaderSuffix,
     // 调试器插件（F8 翻转可见性；backend 只在 --rmlui-demo 下创建，基线零扰动）。
     Rml::Debugger::Initialise(impl->context);
 
+    // M-SP1-d：<sprite> 自定义 element 注册（必须在任何文档解析前——demo 文档
+    // 即刻加载，且脚本 nl_uiLoadDocument 也在热更后走同一 Factory 通道）。
+    Rml::Factory::RegisterElementInstancer("sprite", &g_spriteInstancer);
+
     // demo 文档（loadDocument 复用同一通道：handle、事件挂接、mtime 快照全一致）。
     impl_ = impl.release();
     const int demo = loadDocument("ui/demo.rml");
@@ -704,6 +758,28 @@ void RmlUiBackend::build(RmlUiFrame& frame) {
     impl.drawItems.clear();
     ctx->Update();
     ctx->Render();
+}
+
+// M-SP1-d：外部纹理注册（sprite atlas 共享）。key 语义见 renderer.hpp 常量注释。
+// 不经 createRmlTexture（纹理已存在且内容由 Sprite2DPass 帧内上传维护）；
+// state 已是 ShaderResource（sprite pass draw 内晋升），binding set 走共享账本。
+bool RmlUiBackend::registerExternalTexture(std::uintptr_t key, nvrhi::ITexture* tex) {
+    if (impl_ == nullptr || tex == nullptr || key == 0) return false;
+    Impl& impl = *impl_;
+    auto it = impl.textures.find(key);
+    if (it != impl.textures.end()) {
+        if (it->second.tex.Get() == tex) return true;   // 幂等：同 key 同指针
+        it->second.tex = nvrhi::TextureHandle(tex);     // 纹理对象重建（resize 少见路径）
+        it->second.set = impl.bindingSetFor(it->second.tex);
+        return it->second.set != nullptr;
+    }
+    nvrhi::TextureHandle handle(tex);
+    Impl::Tex entry;
+    entry.tex = handle;
+    entry.set = impl.bindingSetFor(handle);
+    if (!entry.set) return false;
+    impl.textures.emplace(key, std::move(entry));
+    return true;
 }
 
 void RmlUiBackend::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,

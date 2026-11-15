@@ -77,6 +77,11 @@ public:
     bool elementSetText(int handle, const char* elId, const char* text);
     bool elementGetText(int handle, const char* elId, const char** outText);  // 静态缓冲
 
+    // ---- M-SP1-d：外部纹理注册（sprite atlas 共享；key 见 renderer.hpp 常量）----
+    // 幂等：同 key 同指针跳过；指针变化重造 binding set。不持所有权语义差异——
+    // nvrhi handle 引用计数，纹理生命周期仍归 Sprite2DPass。
+    bool registerExternalTexture(std::uintptr_t key, nvrhi::ITexture* tex);
+
 private:
     struct Impl;                    // RmlUi/NVRHI 细节全部封进 cpp（头保持干净）
     Impl* impl_ = nullptr;

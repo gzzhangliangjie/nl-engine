@@ -7,13 +7,23 @@
 // M-PT0 particles.slang, so no new NVRHI vertex-layout risk is introduced.
 //
 // Resources (one .slang, both backends; Vulkan shifts b=256 / t=0 / s=128):
-//   b0 = Sprite2DConstants (volatile CB, 16 B)
+//   b0 = Sprite2DConstants (volatile CB, 32 B since M-SP1)
 //   t0 = StructuredBuffer<SpriteGpu> (64 B / instance)
-//   t1 = atlas texture (RGBA8, straight alpha)
+//   t1 = atlas texture (RGBA8, premultiplied alpha since M-SP1)
 //   s0 = sampler
 //   g_proj.xy = world -> NDC scale, g_proj.zw = world -> NDC offset.
 // CPU computes them from the ortho camera: scale = 2*pixelsPerUnit/displaySize
 // (y negated for screen-down), offset = (-1 - camX*scaleX, 1 + camY*scaleY).
+//
+// M-SP1: one draw per bucket. The per-bucket CB carries g_baseIndex (bucket
+// start offset into g_sprites); the VS reads g_sprites[iid + g_baseIndex].
+// This is the cross-backend-safe replacement for setStartInstanceLocation:
+// SV_InstanceID starts at 0 per draw on DX12 AND Vulkan, so one shader serves
+// both without the firstInstance semantic divergence (M-SP0 note).
+//
+// M-SP1 alpha: atlas pixels AND per-sprite tint are premultiplied on the CPU
+// (ingest / build); the pipeline blends One/InvSrcAlpha, identical to the
+// RmlUi backend so shared atlas textures render identically under both.
 //
 // Layout discipline: SpriteGpu must stay byte-identical to
 // renderer/src/sprite2d.hpp :: SpriteGpu (static_assert there).
@@ -21,6 +31,7 @@
 cbuffer Sprite2DConstants : register(b0)
 {
     float4 g_proj;
+    uint4  g_base;    // x = bucket start index into g_sprites; yzw unused
 };
 
 struct SpriteGpu
@@ -49,7 +60,7 @@ VSOutput vsMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
     const float cy = (vid == 2 || vid == 4 || vid == 5) ? 1.0f : -1.0f;
     const float2 corner = float2(cx, cy);
 
-    SpriteGpu s = g_sprites[iid];
+    SpriteGpu s = g_sprites[iid + g_base.x];
 
     const float ca = cos(s.misc.x);
     const float sa = sin(s.misc.x);
@@ -72,6 +83,7 @@ VSOutput vsMain(uint vid : SV_VertexID, uint iid : SV_InstanceID)
 
 float4 psMain(VSOutput input) : SV_Target
 {
-    // Straight alpha: pipeline blend is SrcAlpha / InvSrcAlpha (same as HUD).
+    // Premultiplied alpha: pipeline blend is One / InvSrcAlpha (M-SP1, same as
+    // the RmlUi backend; atlas pixels and tint are premultiplied on the CPU).
     return g_atlas.Sample(g_sampler, input.uv) * input.color;
 }

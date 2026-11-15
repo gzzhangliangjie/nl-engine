@@ -13,7 +13,16 @@
 #include "nl/renderer/prop_panel.hpp"    // P8 M-SC10：HudFrame::propPanelState 的 POD 定义
 #include "nl/sprite/sprite_desc.hpp"     // M-SP0：Sprite2DFrame 只带 core 纯 POD 指针，公开头零图形符号
 
+// M-SP1-d：sprite atlas <-> RmlUi 共享通道需要 ITexture 指针签名。公开头保持
+// 零 NVRHI include 纪律——只在全局层前向声明（放 nl::renderer 内会变成嵌套
+// namespace nl::renderer::nvrhi，污染子命名空间的 nvrhi:: 查找——r2 构建实证）。
+namespace nvrhi { class ITexture; }
+
 namespace nl::renderer {
+
+// M-SP1-d：RmlUi <sprite> element 的 atlas 纹理账本 key 段（sprite textureId
+// 直接加在基数上）。0 保留 = RmlUi 「无纹理 → 白像素兜底」约定，sprite key 必非 0。
+inline constexpr std::uintptr_t kRmlSpriteTexKeyBase = std::uintptr_t(0x51000000u);
 
 struct Status {
     const char* backend;      // "dx12" / "vulkan"
@@ -479,10 +488,24 @@ struct RmlUiFrame {
 // sprites 指向调用方稳定存储（游戏侧每帧的 SpriteDesc 数组）；renderer 只在
 // 本帧 build() 内读取，不持有。displayWidth/Height 为像素，cameraX/Y 与
 // pixelsPerUnit 定义正交投影，游戏侧可自由换算。
+//
+// M-SP1：帧内图集注册/更新。atlases 指向调用方稳定存储；renderer 在本帧
+// build 段消费后立即建纹理 + 惰性上传（pending 队列，draw 内帧列表上传），
+// 之后每帧只比对 textureId 复用已建资源。textureId 语义与 SpriteDesc 的
+// textureId 一致；textureId 0 由内置 4x4 图集兜底（未注册 id 一律落内置图集）。
+struct Sprite2DAtlasRequest {
+    std::uint32_t textureId = 0;
+    const std::uint8_t* rgba = nullptr;  // 直通 RGBA8，sprite pass 内转预乘
+    std::uint32_t width = 0;
+    std::uint32_t height = 0;
+};
 struct Sprite2DFrame {
     bool  enabled = false;
     const nl::sprite::SpriteDesc* sprites = nullptr;
     std::uint32_t spriteCount = 0;
+    // M-SP1 尾部追加：帧内图集注册/更新（可每帧重推同一 textureId，幂等）。
+    const Sprite2DAtlasRequest* atlases = nullptr;
+    std::uint32_t atlasCount = 0;
     float displayWidth = 0.0f, displayHeight = 0.0f;
     float cameraX = 0.0f, cameraY = 0.0f;
     float pixelsPerUnit = 32.0f;
@@ -711,6 +734,15 @@ public:
     bool rmlShowDocument(int handle, bool show);
     bool rmlElementSetText(int handle, const char* elId, const char* text);
     bool rmlElementGetText(int handle, const char* elId, const char** outText);
+
+    // M-SP1-d：sprite atlas 纹理共享进 RmlUi（<sprite> 自定义 element 通道）。
+    // key = kRmlSpriteTexKeyBase + textureId（0 保留 = RmlUi 白像素兜底约定）。
+    // 幂等：同 key 同指针跳过；指针变化重造 binding set。返回 false = 未初始化。
+    bool rmlRegisterExternalTexture(std::uintptr_t key, nvrhi::ITexture* tex);
+
+    // M-SP1-d：取 Sprite2DPass 的 atlas 纹理（未注册 id 落内置 4x4 图集）。
+    // 纹理内容为预乘 alpha——与 RmlUi 管线同语义，共享零转换。
+    nvrhi::ITexture* spriteAtlasTexture(std::uint32_t textureId);
 
 private:
     Renderer();

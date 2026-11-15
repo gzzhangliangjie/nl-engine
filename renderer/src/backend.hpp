@@ -110,6 +110,9 @@ public:
     virtual bool rmlShowDocument(int handle, bool show) = 0;
     virtual bool rmlElementSetText(int handle, const char* elId, const char* text) = 0;
     virtual bool rmlElementGetText(int handle, const char* elId, const char** outText) = 0;
+    // M-SP1-d：sprite atlas 共享进 RmlUi（key 段常量见 renderer.hpp）+ atlas 纹理取用。
+    virtual bool rmlRegisterExternalTexture(std::uintptr_t key, nvrhi::ITexture* tex) = 0;
+    virtual nvrhi::ITexture* spriteAtlasTexture(std::uint32_t textureId) = 0;
 
     // 调试层消息转日志；返回新增设备错误数
     virtual int  drainMessages() = 0;

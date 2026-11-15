@@ -108,3 +108,18 @@ example\sprite2d\run.bat
   `SPRITE2D-PLAN.md` §4 / §8。
 - 新增 `.slang` 产物登记在 `renderer/src/renderer.cpp::kArtifacts[]`，
   与工具卡无关，勿漏（M8.1 教训）。
+
+## M-SP1 归档（2026-11-15，tag `m-sp1`）
+
+四子项交付：多图集逐桶 draw（CB 32B baseIndex 方案，绕开 setStartInstanceLocation
+双后端分歧）+ `--sprite-demo` 旗标（帧号纯函数数据）+ PNG 基线双后端 4 张 + RmlUi
+`<sprite>` element 桥接（atlas 纹理账本共享，key 段 `kRmlSpriteTexKeyBase`）。
+预乘 alpha 端到端统一（ingest/build CPU 侧转，blend One/InvSrcAlpha 与 RmlUi 同语义）。
+
+展示台：`example/sprite-m1/run.bat normal|scene`（usage exit 2 负向）；cases.json
+`sprite-m1` 卡 2 条 image（165 versions）。验收：双后端 BUILD OK / 机械验收 176/176 ×2 /
+旧卡零漂 m0.5 10/10 + water-t3 4/4 + ecs-e1b 8/8 / `server.py --check` 0 / kStage 不 bump。
+
+设计细节与踩坑全量归档在 `docs/sprite2d/SPRITE2D-PLAN.md` §9（前向声明命名空间层级、
+兄弟命名空间裸名、RmlUi 6.3 API 面、GraphicsState 无 clear、构建锚 rc 假绿、
+投影语义实测澄清、UV 越界静默变红、快进程 stdout 丢失竞态定性顺序）。

@@ -35,6 +35,7 @@
 #include "nl/renderer/renderer.hpp"
 #include "nl/physics/World.hpp"   // M-P3：物理调试场景（DebugScene，PIMPL 把 Jolt 头挡在 cpp 内）
 #include "nl/physics/query.hpp"   // M-W2A：script 查询夹具世界（QueryScene，M-PQ0 探针）
+#include "nl/sprite/sprite_desc.hpp"  // M-SP1：--sprite-demo（SpriteDesc POD，帧内确定性阵列）
 #include "nl/net/Sync.hpp"        // NET M-NET2：同步层会话（服务器权威最小闭环）
 #include "nl/scene/Component.hpp"   // M-E1b.0：--scene 组件库注册 + World 反序列化
 #include "nl/scene/System.hpp"      // M-E1b.5：SpinSystem（Write/Read 读写集系统）
@@ -100,6 +101,144 @@ const nl::renderer::ClearColor kColors[] = {
     {0.45f, 0.20f, 0.80f, 1.0f},  // 紫
 };
 constexpr int kColorCount = static_cast<int>(sizeof(kColors) / sizeof(kColors[0]));
+
+// ---- M-SP1：--sprite-demo（世界空间 2D 精灵，缺省关 = 零扰动）----
+// 消费面：多图集注册（id1 敌人+地形 / id2 道具）+ 逐桶 draw（3 图集 x 多层
+// 强制切桶）+ flipbook 式帧选择 + 预乘 alpha 半透明 tint。数据全部帧号纯
+// 函数：图集像素 static 生成一次，sprite 阵列每帧由 frame 重建 —— 截图
+// 路径下同一帧号双后端逐字节可复现（PNG 基线前提）。
+struct SpriteDemoState {
+    std::vector<std::uint8_t> enemyPixels;              // id 1: 128x64 (4x2 格 32px)
+    std::vector<std::uint8_t> propPixels;               // id 2: 64x64  (4x4 格 16px)
+    nl::sprite::SpriteDesc sprites[24] = {};
+    nl::renderer::Sprite2DAtlasRequest atlases[2] = {};
+    bool built = false;
+
+    // 程序化图集（一次生成）。id1 上排 = 敌人 4 帧（圆形 blob，帧间半径/眼位
+    // 变化），下排 = 地形 4 格（草/土/石/水 + 2px 格边，UV 错误可见）。id2 =
+    // 16 个道具小格，色相递进、alpha 64/255 起（验证预乘混合边界）。
+    void buildAtlases() {
+        if (built) return;
+        built = true;
+        enemyPixels.assign(128u * 64u * 4u, 0u);
+        auto put = [&](std::vector<std::uint8_t>& px, std::uint32_t texW,
+                       std::uint32_t x, std::uint32_t y,
+                       std::uint8_t r, std::uint8_t g, std::uint8_t b, std::uint8_t a) {
+            const std::size_t o = (std::size_t(y) * texW + x) * 4u;
+            px[o + 0] = r; px[o + 1] = g; px[o + 2] = b; px[o + 3] = a;
+        };
+        for (std::uint32_t y = 0; y < 64; ++y) {
+            for (std::uint32_t x = 0; x < 128; ++x) {
+                const std::uint32_t cell = (y / 32u) * 4u + (x / 32u);
+                const bool border = (x % 32u < 2) || (y % 32u < 2);
+                if (y < 32u) {
+                    // 敌人帧 cell 0..3：以格中心为圆心的 blob，帧序半径收缩。
+                    const float cx = float(x % 32u) - 15.5f, cy = float(y % 32u) - 15.5f;
+                    const float rad = 13.0f - float(cell) * 1.5f;
+                    const float d = std::sqrt(cx * cx + cy * cy);
+                    const bool eye = d < 3.0f && cx < -2.0f;   // 单眼偏左
+                    const std::uint8_t body = eye ? 20u : std::uint8_t(200u - cell * 25u);
+                    if (border)            put(enemyPixels, 128u, x, y, 30, 20, 40, 255);
+                    else if (d <= rad)     put(enemyPixels, 128u, x, y, body, 60, 90, 255);
+                    else                   put(enemyPixels, 128u, x, y, 0, 0, 0, 0);
+                } else {
+                    // 地形 tile cell 4..7：草/土/石/水底色 + 确定性棋盘噪点。
+                    static const std::uint8_t base[4][3] = {
+                        {60, 140, 70}, {140, 100, 60}, {110, 110, 115}, {55, 90, 160}};
+                    const std::uint32_t t = cell - 4u;
+                    const bool check = ((x / 4u) + (y / 4u)) % 2u == 0u;
+                    const std::uint8_t v = check ? 255u : 210u;
+                    const std::uint8_t r = std::uint8_t(base[t][0] * v / 255u);
+                    const std::uint8_t g = std::uint8_t(base[t][1] * v / 255u);
+                    const std::uint8_t b2 = std::uint8_t(base[t][2] * v / 255u);
+                    if (border) put(enemyPixels, 128u, x, y, 25, 25, 28, 255);
+                    else        put(enemyPixels, 128u, x, y, r, g, b2, 255);
+                }
+            }
+        }
+        propPixels.assign(64u * 64u * 4u, 0u);
+        for (std::uint32_t y = 0; y < 64; ++y) {
+            for (std::uint32_t x = 0; x < 64; ++x) {
+                const std::uint32_t cell = (y / 16u) * 4u + (x / 16u);
+                const bool border = (x % 16u < 1) || (y % 16u < 1);
+                const float hue = float(cell) / 16.0f;
+                const std::uint8_t r = std::uint8_t(40.0f + 200.0f * hue);
+                const std::uint8_t g = std::uint8_t(40.0f + 200.0f * (1.0f - hue));
+                const std::uint8_t b = std::uint8_t(120.0f + 60.0f * hue);
+                const std::uint8_t a = std::uint8_t(64u + cell * 12u);   // 64..244
+                if (border) put(propPixels, 64u, x, y, 255, 255, 255, 200);
+                else        put(propPixels, 64u, x, y, r, g, b, a);
+            }
+        }
+        atlases[0].textureId = 1;
+        atlases[0].rgba = enemyPixels.data();
+        atlases[0].width = 128; atlases[0].height = 64;
+        atlases[1].textureId = 2;
+        atlases[1].rgba = propPixels.data();
+        atlases[1].width = 64; atlases[1].height = 64;
+    }
+
+    // 帧号 -> 确定性 sprite 阵列。格子 UV 手工换算（cell -> [0,1] 子矩形）。
+    static nl::sprite::UvRect cellUv(std::uint32_t cx, std::uint32_t cy,
+                                     std::uint32_t gx, std::uint32_t gy) {
+        nl::sprite::UvRect r;
+        r.u0 = float(cx) / float(gx); r.u1 = float(cx + 1) / float(gx);
+        r.v0 = float(cy) / float(gy); r.v1 = float(cy + 1) / float(gy);
+        return r;
+    }
+    void buildFrame(std::uint64_t frame) {
+        buildAtlases();
+        using TextureIdT = nl::sprite::TextureId;
+        int n = 0;
+        auto add = [&](float x, float y, float w, float h, nl::sprite::UvRect uv,
+                       const float* rgba, float rot, TextureIdT id, std::uint32_t layer) {
+            nl::sprite::SpriteDesc& s = sprites[n++];
+            s.x = x; s.y = y; s.width = w; s.height = h;
+            s.rotation = rot; s.originX = 0.5f; s.originY = 0.5f;
+            s.uv = uv;
+            for (int k = 0; k < 4; ++k) s.color[k] = rgba[k];
+            s.textureId = id;
+            s.layer = layer;
+            s.sequence = 0;   // SpriteBatch::add 重编（提交序即稳定序）
+        };
+        // 地板：8 块 tile（layer 0，id1 下排草/土交替），沿屏幕底边铺一排。
+        // M-SP0 投影语义：world y 正方向 = 屏幕向下、原点经 cameraX/Y 重定位
+        //（见下方 camera 换算），因此地板放 y=+3.2、装饰层放负 y（屏幕上方）。
+        for (int i = 0; i < 8; ++i) {
+            const nl::sprite::UvRect uv = cellUv(std::uint32_t(i) % 4u, 1u, 4u, 2u);
+            const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            add(-7.0f + 2.0f * i, 3.2f, 2.0f, 2.0f, uv, white, 0.0f, 1u, 0u);
+        }
+        // 敌人：id1 上排 4 帧 flipbook（8 帧换一帧），idle 弹跳 + 轻微摇摆。
+        {
+            const std::uint32_t cell = std::uint32_t(frame / 8u) % 4u;
+            const nl::sprite::UvRect uv = cellUv(cell, 0u, 4u, 2u);
+            const float hop = std::abs(std::sin(float(frame) * 0.1f)) * 0.3f;
+            const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            add(0.0f, hop, 2.4f, 2.4f, uv, white,
+                std::sin(float(frame) * 0.05f) * 0.1f, 1u, 1u);
+        }
+        // 环绕道具：10 个小球（id2，格 i%16），绕敌人均速旋转 —— 多桶同层
+        // 强制切桶（同层 id1 与 id2 交错出现 → 两个桶）。
+        for (int i = 0; i < 10; ++i) {
+            const float ang = float(i) * (6.28318f / 10.0f) + float(frame) * 0.05f;
+            const nl::sprite::UvRect uv = cellUv(std::uint32_t(i) % 4u,
+                                                 std::uint32_t(i) / 4u, 4u, 4u);
+            const float white[4] = {1.0f, 1.0f, 1.0f, 1.0f};
+            add(std::cos(ang) * 4.5f, std::sin(ang) * 2.6f,
+                0.9f, 0.9f, uv, white, ang, 2u, 1u);
+        }
+        // 半透明大格：5 个 alpha 0.5 的 tint 格（layer 2，id2）叠在敌群上方，
+        // 验证预乘 One/InvSrcAlpha 的半透明叠加正确性。
+        for (int i = 0; i < 5; ++i) {
+            const nl::sprite::UvRect uv = cellUv(std::uint32_t(i), 3u, 4u, 4u);
+            const float tint[4] = {1.0f, 0.6f, 0.3f, 0.5f};
+            add(-6.0f + 3.0f * i, -3.6f, 2.5f, 2.5f, uv, tint,
+                0.0f, 2u, 2u);
+        }
+    }
+};
+
 
 // M0.8：调试着色模式（与 model.slang 的 g_options.x / HUD combo 一致）
 // M1.3：4 = cluster（只有 cluster 场景提供了 CLUSTERCOLOR 属性；normal 场景选它会
@@ -226,6 +365,7 @@ struct Options {
     std::string pickAt;        // M-I4：--pick-at <px,py>（确定性注入拾取，首帧执行；不依赖真实鼠标）
     std::string dropSim;       // M-I5：--drop-sim <path>（模拟文件拖拽，首帧注入同一消费队列）
     bool rmluiDemo  = false;  // M-UI0：--rmlui-demo（RmlUi UI 层，默认关 = 零扰动）
+    bool spriteDemo = false;  // M-SP1：--sprite-demo（世界空间 2D 精灵 demo，默认关 = 零扰动）
     // M-UI0 验收：无头合成点击（A 类旗标缺省关）。--rmlui-click <frame>,<x>,<y>
     // = 第 frame 帧在 (x,y) 按下、frame+1 释放——走 RmlUi 完整 ProcessMouseButton
     // 管线产出 click（比 DispatchEvent 更真实：含 hover/active 状态与边沿检测）。
@@ -672,6 +812,8 @@ Options parseArgs(int argc, char** argv) {
             o.particles = true;
         } else if (a == "--rmlui-demo") {         // M-UI0：RmlUi UI 层（声明式文档 + 热重载 + F8 调试器）
             o.rmluiDemo = true;
+        } else if (a == "--sprite-demo") {        // M-SP1：世界空间 2D 精灵 demo（多图集 + 逐桶 draw）
+            o.spriteDemo = true;
         } else if (a == "--rmlui-click" && i + 1 < argc) { // M-UI0：无头合成点击（验收用）
             if (std::sscanf(argv[++i], "%d,%f,%f", &o.rmluiClickFrame, &o.rmluiClickX, &o.rmluiClickY) != 3) {
                 std::cerr << "invalid --rmlui-click (expected frame,x,y)\n";
@@ -4405,6 +4547,8 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
 
         nl::renderer::HudFrame hud{};
         nl::renderer::RmlUiFrame rmlFrame{};   // M-UI0：--rmlui-demo 时启用并喂数
+        SpriteDemoState spriteDemoState{};     // M-SP1：--sprite-demo 时启用并喂数
+        nl::renderer::Sprite2DFrame spriteFrame{};   // M-SP1：renderFrame 尾参
         // P8 M-SC10：属性面板同步 + 挂入（runScene 同款；训练场脚本调参即本体）。
         if (o.propPanelOn && scriptLoaded) {
             propPanelSync(propPanelState, propPanelBuiltGen, scriptLoaded);
@@ -4755,10 +4899,40 @@ int runNormal(const Options& o, bool cluster = false, bool lodMode = false,
             rmlFrame.textCharCount = static_cast<int>(std::min<std::size_t>(nChars, 32));
         }
 
+        // M-SP1：--sprite-demo 世界空间 2D 精灵（帧号纯函数，截图路径确定性；
+        // 多图集每帧幂等重推 + flipbook 帧选择 + 逐桶 draw 全走）。
+        if (o.spriteDemo) {
+            spriteDemoState.buildFrame(static_cast<std::uint64_t>(frame));
+            spriteFrame.enabled = true;
+            spriteFrame.sprites = spriteDemoState.sprites;
+            spriteFrame.spriteCount = 24;
+            spriteFrame.atlases = spriteDemoState.atlases;
+            spriteFrame.atlasCount = 2;
+            spriteFrame.displayWidth = static_cast<float>(extent.width);
+            spriteFrame.displayHeight = static_cast<float>(extent.height);
+            // M-SP0 投影公式：ndc.x=(x-camX)*sx-1 / ndc.y=(y+camY)*sy+1（sy<0）。
+            // 想让 world 原点落屏幕中心：camX = -W/(2*ppu)（消掉 -1），camY =
+            // +H/(2*ppu)（消掉 +1）。推导实测见 M-SP1 台账踩坑。
+            spriteFrame.cameraX = -static_cast<float>(extent.width) / (2.0f * 32.0f);
+            spriteFrame.cameraY = static_cast<float>(extent.height) / (2.0f * 32.0f);
+            spriteFrame.pixelsPerUnit = 32.0f;
+            // M-SP1-d：--rmlui-demo 同开时把两图集共享进 RmlUi <sprite> 账本
+            //（幂等；首帧图集纹理未就绪时返回 false，次帧起注册成功）。
+            if (o.rmluiDemo) {
+                for (std::uint32_t id : {1u, 2u}) {
+                    if (nvrhi::ITexture* tex = renderer->spriteAtlasTexture(id)) {
+                        renderer->rmlRegisterExternalTexture(
+                            nl::renderer::kRmlSpriteTexKeyBase + id, tex);
+                    }
+                }
+            }
+        }
+
         maybeTriggerRenderDocCapture(frame + 1, o.captureFrame);   // M-TR2
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
                                    (hudEnabled || consoleOpen || editorActive || inputHud || driveHudOn || navPanelActive || o.profilingHud || o.propPanelOn) ? &hud : nullptr,
-                                   o.rmluiDemo ? &rmlFrame : nullptr)) {
+                                   o.rmluiDemo ? &rmlFrame : nullptr,
+                                   o.spriteDemo ? &spriteFrame : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
@@ -6494,6 +6668,8 @@ int runScene(const Options& o) {
 
         nl::renderer::HudFrame hud{};
         nl::renderer::RmlUiFrame rmlFrame{};   // M-UI0：--rmlui-demo 时启用并喂数
+        SpriteDemoState spriteDemoState{};     // M-SP1：--sprite-demo 时启用并喂数
+        nl::renderer::Sprite2DFrame spriteFrame{};   // M-SP1：renderFrame 尾参
         // M-C2：主面板随 --hud（runScene 缺省可见语义收敛为显式门）——M-SC10
         // additive 不连带主面板（--no-hud + --prop-panel = 只画 script props；
         // profiling-hud 独立窗口的 M-TR0 抑制语义不变，profiling 块内再覆写）。
@@ -6567,9 +6743,35 @@ int runScene(const Options& o) {
             rmlFrame.mouseX = -100.0f;
             rmlFrame.mouseY = -100.0f;
         }
+        // M-SP1：scene 模式 sprite 最小喂数（同 runNormal 一套确定性数据；
+        // 帧号纯函数保 --screenshot 路径可复现）。
+        if (o.spriteDemo) {
+            spriteDemoState.buildFrame(static_cast<std::uint64_t>(frame));
+            spriteFrame.enabled = true;
+            spriteFrame.sprites = spriteDemoState.sprites;
+            spriteFrame.spriteCount = 24;
+            spriteFrame.atlases = spriteDemoState.atlases;
+            spriteFrame.atlasCount = 2;
+            const auto se = renderer->extent();
+            spriteFrame.displayWidth = static_cast<float>(se.width);
+            spriteFrame.displayHeight = static_cast<float>(se.height);
+            // 同 runNormal：camera 换算把 world 原点重定位到屏幕中心。
+            spriteFrame.cameraX = -static_cast<float>(se.width) / (2.0f * 32.0f);
+            spriteFrame.cameraY = static_cast<float>(se.height) / (2.0f * 32.0f);
+            spriteFrame.pixelsPerUnit = 32.0f;
+            if (o.rmluiDemo) {
+                for (std::uint32_t id : {1u, 2u}) {
+                    if (nvrhi::ITexture* tex = renderer->spriteAtlasTexture(id)) {
+                        renderer->rmlRegisterExternalTexture(
+                            nl::renderer::kRmlSpriteTexKeyBase + id, tex);
+                    }
+                }
+            }
+        }
         if (!renderer->renderFrame(kColors[colorIndex], fp, capturePath,
                                    hudOn ? &hud : nullptr,
-                                   o.rmluiDemo ? &rmlFrame : nullptr)) {
+                                   o.rmluiDemo ? &rmlFrame : nullptr,
+                                   o.spriteDemo ? &spriteFrame : nullptr)) {
             nl::core::log::errorCh("viewer", "renderFrame failed: ", renderer->lastError());
             failed = true;
             break;
