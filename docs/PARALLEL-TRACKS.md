@@ -204,6 +204,10 @@
 
 2026-11-08 用户拍板：寻路 / 物理 / 3D 音频**依赖场景整合**，先立项出计划，**执行放到 P8 E1（ECS-lite 场景）验收之后**；届时按 §7 模式新建 worktree。**2026-11-09 用户指令提前解锁物理轨道**（见 §7.1e），寻路 / 音频仍排其后。**→ 2026-11-11 寻路整轨 M-N0~M-N6 全量收官 merge 回 master（`5356c80` + `d3d6127`），worktree 已拆 / 分支保留 / TRACKS CLOSED；本节「待建」对寻路不再适用，重开按 §7.1b 重建。→ 2026-11-13 音频整轨确认收官（M-S3 随 M-GL2 交付，见下行），本节「待建」对音频同样不再适用。**
 
+> **wt 建后唯一权威步骤（2026-11-15 根治，替代此前全部手工步骤）**：worktree add 之后跑一次
+> `python tools/wt_pool.py setup --track <轨道>`
+> —— 幂等完成：① `.workbuddy` junction 共享主树（wt 侧若有 checkout 出来的实体目录自动替换，权威在主树）；② `thirdparty/slang/dist` junction 共享主树（untracked 构建产物，wt 侧天然不存在）；③ 遗留 wt index 里仍被跟踪的 `.workbuddy` 路径批量 skip-worktree。前提：master 已把 `.workbuddy/` 全部移出跟踪（2026-11-15 `git rm --cached .workbuddy/memory/2026-11-14.md`，`.gitignore` 的 `/.workbuddy/` 自此真正生效），新 wt checkout 不再产生实体 `.workbuddy`。
+
 | 轨道 | 届时 worktree 绝对路径 | 分支（届时建） | 计划 |
 |---|---|---|---|
 | 寻路（vendored Recast/Detour） | ~~`E:/UE_STUDY_2026/nl-engine-pathfinding`~~（已拆） | `feat/pathfinding` + tags `nav-m0`~`nav-n6` + `nav-done` + 分支 `milestone/nav-done` | `docs/p8/P8-NAV-PLAN.md` + `NAV-TOOLS-GUIDE.md`；merge `5356c80` + `d3d6127`；明细 MILESTONES M-N0~N6 节 |

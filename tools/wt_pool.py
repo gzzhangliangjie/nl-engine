@@ -37,7 +37,9 @@ import glob
 import json
 import os
 import re
+import shutil
 import socket
+import stat
 import subprocess
 import sys
 
@@ -156,10 +158,13 @@ TRACKS = {
                 "fully done, reopen via §7.1b only",
     },
     "input": {
-        "wt": "", "branch": "feat/input", "state": "closed",
+        "wt": "E:/UE_STUDY_2026/nl-engine-input",
+        "branch": "feat/input", "state": "active",
         "note": "M-I0~M-I2 merged to master 0df16a0 (tags input-m0~input-m2) "
-                "2026-11-10; wt removed 2026-11-10, branch kept per "
-                "PARALLEL-TRACKS 7.6; state CLOSED by user instruction 2026-11-13",
+                "2026-11-10. 2026-11-15 §7.1b reopen by user instruction "
+                "「键鼠操作整体 review 全做」: M-I3 脚本鼠标 API + 指针锁定 / "
+                "M-I4 屏幕拾取 / M-I5 重映射文件 + 拖拽 + 字符暴露 + 手柄; "
+                "wt rebuilt on master 3d17d42, junction .workbuddy + slang dist",
     },
     "drive": {
         "wt": "E:/UE_STUDY_2026/nl-engine-drive",
@@ -541,7 +546,7 @@ def close_report_path(track, ms):
 
 def _git(args_git, cwd=None):
     return subprocess.run(["git"] + args_git, capture_output=True, text=True,
-                          cwd=cwd)
+                          encoding="utf-8", errors="replace", cwd=cwd)
 
 
 def cmd_close(args):
@@ -785,6 +790,115 @@ def cmd_guard(args):
     print("guard: OK '%s' op=%s claimed by '%s'."
           % (track, op, cur["milestone"]))
     sys.exit(0)
+
+
+# ---------------------------------------------------------------------------
+# setup (2026-11-15 root fix): idempotent wt sharing normalization. Replaces
+# the manual "recursively delete the checked-out .workbuddy copy, then junction
+# .workbuddy + slang dist" steps that repeated at every wt build
+# (PARALLEL-TRACKS 7.1b). Authority always lives in the main tree.
+# ---------------------------------------------------------------------------
+FILE_ATTRIBUTE_REPARSE_POINT = 0x400
+
+
+def _is_reparse_point(path):
+    """True if path is a junction/symlink reparse point (does NOT follow it)."""
+    if not os.path.lexists(path):
+        return False
+    try:
+        attrs = ctypes.windll.kernel32.GetFileAttributesW(path)
+        return attrs != -1 and bool(attrs & FILE_ATTRIBUTE_REPARSE_POINT)
+    except Exception:
+        return False
+
+
+def _make_junction(link, target):
+    """Create a directory junction at `link` pointing to `target`."""
+    try:
+        os.makedirs(os.path.dirname(link), exist_ok=True)  # parent must exist
+    except OSError as e:
+        fail("cannot create parent dir for junction %s: %s" % (link, e))
+    try:
+        import _winapi  # CPython internal, stable; link at 2nd arg -> target 1st
+        _winapi.CreateJunction(target, link)
+        if os.path.isdir(link):
+            return
+    except (ImportError, OSError):
+        pass
+    r = subprocess.run(["cmd", "/c", "mklink", "/J", link, target],
+                       capture_output=True, text=True,
+                       encoding="utf-8", errors="replace")
+    if r.returncode != 0 or not os.path.isdir(link):
+        fail("mklink /J failed: %s -> %s (%s)"
+             % (link, target, (r.stderr or r.stdout or "").strip()))
+
+
+def _rmtree_force(path):
+    def _onerror(func, p, _exc):
+        os.chmod(p, stat.S_IWRITE)
+        func(p)
+    shutil.rmtree(path, onerror=_onerror)
+
+
+def _normalize_junction(link, target, label):
+    """Make `link` a junction -> `target`. A real directory at `link` is a
+    tracked-copy checkout residue: removed without question (user decision
+    2026-11-15: contents are tracked copies, authority in the main tree)."""
+    if _is_reparse_point(link):
+        print("  %-12s junction already in place" % label)
+        return
+    if os.path.isdir(link):
+        _rmtree_force(link)
+        print("  %-12s removed real dir (authority in main tree)" % label)
+    elif os.path.lexists(link):
+        fail("%s exists and is neither directory nor junction: %s" % (label, link))
+    _make_junction(link, target)
+    print("  %-12s junction created -> %s" % (label, target))
+
+
+def cmd_setup(args):
+    """Idempotent post-checkout normalization for a track wt (PARALLEL-TRACKS
+    7.1b canonical procedure): junction-share .workbuddy and
+    thirdparty/slang/dist from the main tree, then flag any still-tracked
+    .workbuddy paths skip-worktree so git status stays clean."""
+    info = TRACKS.get(args.track)
+    if info is None:
+        fail("track '%s' not in registry." % args.track)
+    wt = info["wt"]
+    if not wt or not os.path.isdir(wt):
+        fail("wt for track '%s' does not exist ('%s'). Build it first "
+             "(git worktree add, PARALLEL-TRACKS 7.1b), then run setup."
+             % (args.track, wt))
+    root = main_root()
+    main_wb = os.path.join(root, ".workbuddy")
+    if not os.path.isdir(main_wb):
+        fail("main-tree .workbuddy missing: %s" % main_wb)
+    print("SETUP: track='%s' wt=%s" % (args.track, wt))
+    _normalize_junction(os.path.join(wt, ".workbuddy"), main_wb, ".workbuddy")
+
+    main_dist = os.path.join(root, "thirdparty", "slang", "dist")
+    if not os.path.isdir(main_dist):
+        fail("main-tree slang dist missing: %s (download/build it first)." % main_dist)
+    _normalize_junction(os.path.join(wt, "thirdparty", "slang", "dist"),
+                        main_dist, "slang-dist")
+
+    # legacy wts: tracked .workbuddy paths in THIS wt's index -> skip-worktree
+    r = _git(["ls-files", ".workbuddy"], cwd=wt)
+    if r.returncode != 0:
+        warn("git ls-files failed in wt (%s); skip-worktree check skipped."
+             % (r.stderr or r.stdout).strip())
+    else:
+        tracked = [ln.strip() for ln in r.stdout.split("\n") if ln.strip()]
+        if tracked:
+            ru = _git(["update-index", "--skip-worktree", "--"] + tracked, cwd=wt)
+            if ru.returncode != 0:
+                fail("update-index --skip-worktree failed: %s"
+                     % (ru.stderr or "").strip())
+            print("  %-12s %d tracked .workbuddy path(s) flagged"
+                  % ("skip-worktree", len(tracked)))
+        else:
+            print("  %-12s no tracked .workbuddy paths (clean)" % "skip-worktree")
+    print("SETUP OK")
 
 
 def _norm(p):
@@ -1036,6 +1150,54 @@ def cmd_selftest(args):
         finally:
             os.chdir(old_cwd)
 
+        # 16. setup: main-tree share sources exist
+        os.makedirs(os.path.join(tmp, ".workbuddy", "memory"), exist_ok=True)
+        with open(os.path.join(tmp, ".workbuddy", "MEMORY.md"), "w") as f:
+            f.write("auth")
+        os.makedirs(os.path.join(tmp, "thirdparty", "slang", "dist"), exist_ok=True)
+        open(os.path.join(tmp, "thirdparty", "slang", "dist", "slangc.exe"),
+             "w").close()
+
+        # 17. setup: real .workbuddy dir in wt (tracked-copy residue) replaced
+        os.makedirs(os.path.join(wt_dir, ".workbuddy"), exist_ok=True)
+        open(os.path.join(wt_dir, ".workbuddy", "stale.txt"), "w").close()
+        c, out = run(["setup", "--track", "console"])
+        expect("setup replaces real dir", c == 0 and "SETUP OK" in out,
+               "setup real-dir replace")
+        expect("setup .workbuddy is junction",
+               _is_reparse_point(os.path.join(wt_dir, ".workbuddy")),
+               ".workbuddy junction in place")
+        expect("setup junction reads main content",
+               open(os.path.join(wt_dir, ".workbuddy", "MEMORY.md")).read()
+               == "auth",
+               "junction shares main-tree content")
+        expect("setup stale tracked copy gone",
+               not os.path.exists(os.path.join(wt_dir, ".workbuddy", "stale.txt")),
+               "stale tracked-copy removed")
+
+        # 18. setup: slang dist junction created
+        expect("setup slang dist junction",
+               _is_reparse_point(os.path.join(wt_dir, "thirdparty", "slang",
+                                              "dist")),
+               "slang dist junction in place")
+
+        # 19. setup: idempotent re-run
+        c, out = run(["setup", "--track", "console"])
+        expect("setup idempotent re-run", c == 0 and "SETUP OK" in out,
+               "setup idempotent")
+
+        # 20. setup: missing main-tree slang dist -> fail
+        os.rename(os.path.join(tmp, "thirdparty"),
+                  os.path.join(tmp, "thirdparty-bak"))
+        c, out = run(["setup", "--track", "console"])
+        expect("setup missing main dist fails", c == 1, "setup fails w/o dist")
+        os.rename(os.path.join(tmp, "thirdparty-bak"),
+                  os.path.join(tmp, "thirdparty"))
+
+        # 21. setup: unknown wt (absent dir) -> fail
+        c, out = run(["setup", "--track", "mg"])
+        expect("setup absent wt fails", c == 1, "setup fails w/o wt dir")
+
         os.environ.pop("NL_WT_POOL_LOCK", None)
     print("selftest: %d/%d ALL GREEN" % (n[0], n[0]))
     sys.exit(0)
@@ -1096,6 +1258,13 @@ def main():
     p.add_argument("--milestone", default="",
                    help="your milestone id; verifies the claim matches")
     p.set_defaults(fn=cmd_scope)
+
+    p = sub.add_parser("setup", help="idempotent wt sharing normalization "
+                                     "(2026-11-15 root fix): junction .workbuddy "
+                                     "+ slang dist from main tree, skip-worktree "
+                                     "legacy tracked paths")
+    p.add_argument("--track", required=True)
+    p.set_defaults(fn=cmd_setup)
 
     sub.add_parser("status", help="registry x lock cross-check").set_defaults(fn=cmd_status)
     sub.add_parser("selftest", help="in-process self test").set_defaults(fn=cmd_selftest)
