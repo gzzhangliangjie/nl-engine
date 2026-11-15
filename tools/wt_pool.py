@@ -296,16 +296,6 @@ TRACKS = {
                 "order), branch + tags s14-restir/s14-adaptive/s14c-spawn/"
                 "s14c-fixup kept; reopen via PARALLEL-TRACKS 7.1b",
     },
-    "ui-rmlui": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-ui-rmlui",
-        "branch": "feat/ui-rmlui", "state": "active",
-        "note": "A-class UI track opened 2026-11-15 (M-UI0; user picked "
-                "RmlUi after comparison table 2026-11-15, decided one-shot "
-                "scope incl C# bridge); plan docs/ui/RMLUI-PLAN.md; wt "
-                "built 2026-11-15 from master 38e8db8, junctions "
-                ".workbuddy + thirdparty/slang/dist; A-class tools-grade "
-                "handoff, --rmlui-demo default off, no kStage bump",
-    },
     "weather": {
         "wt": "", "branch": "feat/weather", "state": "closed",
         "note": "weather interleave track (plan docs/WEATHER-PLAN.md, "
@@ -351,7 +341,8 @@ TRACKS = {
                 "+--rmlui-click headless acceptance; dual-backend BUILD OK "
                 "+ selftest 16/16 x2 + acceptance anchors green + "
                 "default-off zero-drift; wt KEPT pending user decision on "
-                "removal; whole-track merge to master pending user call",
+                "removal; whole-track MERGED to master (no-ff cfe6a8f, "
+                "2026-11-15)",
     },
 }
 
