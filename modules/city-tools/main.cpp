@@ -35,7 +35,7 @@
 //   RNG 流契约继续冻结，无新增消费点。
 //
 // M-W3.0 外部资产通道（docs/worldgen/W3-PLAN.md 拍板 A1+B1+C1+D1）：树池 12
-//   种（thirdparty/kenney-nature-kit/，名字表 kTreeVariantNames selftest 锁）+
+//   种（assets/thirdparty/kenney-nature-kit/，名字表 kTreeVariantNames selftest 锁）+
 //   车池 8 种（kenney-car-kit，沿路网边停靠 t∈[0.2,0.8]）+ 路灯（poly-
 //   streetlight，每路口 1 盏）。glb 本体由 drive 从 vendored 目录装配
 //   （city-tools 零资产依赖，A1 拍板）；车运动归 M-T0 交通轨。
@@ -385,7 +385,7 @@ std::uint32_t buildingVariant(std::uint64_t seed, std::uint32_t blockIndex,
 
 // ---------------------------------------------------------------------------
 // M-W3.0 外部资产摆放（W3-PLAN 拍板 A1+B1+C1：drive 层装配 / city-tools 产
-// 摆放数据 / 树+车+路灯试点）。名字表与 thirdparty/{kenney-nature-kit,
+// 摆放数据 / 树+车+路灯试点）。名字表与 assets/thirdparty/{kenney-nature-kit,
 // kenney-car-kit, poly-streetlight}/ 一一对应（selftest 锁池界 + 覆盖；
 // A1 拍板 city-tools 零资产依赖——只写名字不读文件，glb 本体由 drive 从
 // vendored 目录拷进 assets/models/）。变体选取全部 fnv1a64 纯函数（零 RNG，
@@ -774,7 +774,7 @@ std::string serializeRoadnet(const Roadnet& net) {
 // block 局部坐标原点 = cell 中心）。确定性文本（%.3f，C locale，固定序）。
 // ---------------------------------------------------------------------------
 // M-W1.1 建筑贴图 —— ambientCG CC0 照片级立面纹理（用户拍板：kenney 实测为
-// 色板图集无窗户图案后改道）。资产溯源 thirdparty/ambientcg-facades/VENDOR.md：
+// 色板图集无窗户图案后改道）。资产溯源 assets/thirdparty/ambientcg-facades/VENDOR.md：
 // tier1=Facade018A 砖墙白窗（低层住宅）/ tier2=Facade001 蓝灰幕墙窗格（中层
 // 办公）/ tier3=Facade002 深灰幕墙暖黄亮窗（高层塔楼）。city-tools 零像素生
 // 成：generate 把 exe 旁 textures/ 的入库 JPG 逐字节拷贝为产物贴图（构建期
@@ -822,7 +822,7 @@ bool writeCityTextures(const std::string& srcDir, const std::string& outDir) {
 std::string serializeCityMtl() {
     std::string s;
     s += "# city-tools M-W1.1 building material library (ambientCG CC0 facades,\n";
-    s += "# see thirdparty/ambientcg-facades/VENDOR.md for provenance)\n";
+    s += "# see assets/thirdparty/ambientcg-facades/VENDOR.md for provenance)\n";
     for (int tier = 1; tier <= kTexTierCount; ++tier) {
         char buf[96];
         std::snprintf(buf, sizeof buf,

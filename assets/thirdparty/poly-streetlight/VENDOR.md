@@ -1,4 +1,4 @@
-# thirdparty/poly-streetlight — Street Light（路灯）
+# assets/thirdparty/poly-streetlight — Street Light（路灯）
 
 - **模型**：Street Light by Quaternius（poly.pizza 模型 ID 见下载 URL，
   `static.poly.pizza/451a3b57-b957-4184-9c67-4a11587299b5.glb`，2026-11-14）。

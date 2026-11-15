@@ -99,28 +99,37 @@ def copy_tree(src: Path, dst: Path) -> int:
 
 
 def collect_thirdparty_notices(dst: Path) -> list:
-    """汇总 thirdparty/<lib>/LICENSE* 到 THIRD-PARTY-NOTICES.txt。
+    """汇总 thirdparty/<lib>/LICENSE* 与 assets/thirdparty/<资产>/LICENSE* 到
+    THIRD-PARTY-NOTICES.txt（M-MOD0：第三方资产归 assets/thirdparty/，许可义务
+    必须继续入汇总——kenney CC0 / ambientCG CC0 / poly-streetlight CC0）。
     缺 LICENSE 的库记入 missing，由调用方决定是否放行。"""
     lines = ["nl-engine THIRD-PARTY NOTICES", "=" * 60, ""]
     missing = []
-    libs = sorted(d for d in THIRDPARTY_DIR.iterdir()
-                  if d.is_dir() and not d.name.startswith("."))
-    for lib in libs:
-        lines.append("-" * 60)
-        lines.append(f"Library: {lib.name}")
-        vendor_md = lib / "VENDOR.md"
-        if vendor_md.is_file():
-            lines.append(f"VENDOR.md: thirdparty/{lib.name}/VENDOR.md (见仓库)")
-        lic_files = [p for p in sorted(lib.iterdir())
-                     if p.is_file() and p.name.upper().startswith("LICENSE")]
-        if not lic_files:
-            missing.append(lib.name)
-            lines.append("!! LICENSE file NOT FOUND in package source")
-        else:
-            for lf in lic_files:
-                lines.append(f"--- {lib.name}/{lf.name} ---")
-                lines.append(lf.read_text(encoding="utf-8", errors="replace"))
-        lines.append("")
+    roots = [
+        (THIRDPARTY_DIR, "thirdparty"),
+        (REPO_ROOT / "assets" / "thirdparty", "assets/thirdparty"),
+    ]
+    for root, root_label in roots:
+        if not root.is_dir():
+            continue
+        libs = sorted(d for d in root.iterdir()
+                      if d.is_dir() and not d.name.startswith("."))
+        for lib in libs:
+            lines.append("-" * 60)
+            lines.append(f"Library: {root_label}/{lib.name}")
+            vendor_md = lib / "VENDOR.md"
+            if vendor_md.is_file():
+                lines.append(f"VENDOR.md: {root_label}/{lib.name}/VENDOR.md (见仓库)")
+            lic_files = [p for p in sorted(lib.iterdir())
+                         if p.is_file() and p.name.upper().startswith("LICENSE")]
+            if not lic_files:
+                missing.append(f"{root_label}/{lib.name}")
+                lines.append("!! LICENSE file NOT FOUND in package source")
+            else:
+                for lf in lic_files:
+                    lines.append(f"--- {lib.name}/{lf.name} ---")
+                    lines.append(lf.read_text(encoding="utf-8", errors="replace"))
+            lines.append("")
     out = dst / "THIRD-PARTY-NOTICES.txt"
     out.write_text("\n".join(lines), encoding="utf-8", newline="\n")
     return missing

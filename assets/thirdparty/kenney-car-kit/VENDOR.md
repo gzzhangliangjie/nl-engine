@@ -1,4 +1,4 @@
-# thirdparty/kenney-car-kit — Kenney Car Kit（车池）
+# assets/thirdparty/kenney-car-kit — Kenney Car Kit（车池）
 
 - **来源**：https://kenney.nl/assets/car-kit （官方站挡 curl 403；经
   `cdn.cinevva.com/assets/packs/kenney/car-kit/<name>.glb` 直链获取，

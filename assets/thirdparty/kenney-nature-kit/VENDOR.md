@@ -1,4 +1,4 @@
-# thirdparty/kenney-nature-kit — Kenney Nature Kit 2.1（树池）
+# assets/thirdparty/kenney-nature-kit — Kenney Nature Kit 2.1（树池）
 
 - **来源**：https://kenney.nl/assets/nature-kit （官方站挡 curl 403；经 GitHub
   镜像 `ANAMASGARD/ClanCode` `public/assets/kenney_nature-kit/Models/GLTF format/`

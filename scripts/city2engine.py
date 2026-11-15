@@ -71,8 +71,8 @@ ENTITY_NAME_RE = re.compile(r"^block_(\d+)$")
 # M-W3.0 vendored glb references in city.scene: any "mesh" value that is not
 # a blocks/block_NN.obj intermediate ref is a flat vendored asset name
 # (tree_*.glb / car-*.glb / streetlight.glb written by city-tools M-W3.0).
-VENDORED_DIRS = ("thirdparty/kenney-nature-kit", "thirdparty/kenney-car-kit",
-                 "thirdparty/poly-streetlight")
+VENDORED_DIRS = ("assets/thirdparty/kenney-nature-kit", "assets/thirdparty/kenney-car-kit",
+                 "assets/thirdparty/poly-streetlight")
 
 
 def glb_name(seed: int, size: int, block_id: int) -> str:

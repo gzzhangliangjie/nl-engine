@@ -51,7 +51,7 @@ import sys
 # ---------------------------------------------------------------------------
 TRACKS = {
     "material-graph": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-material-graph",
+        "wt": "",
         "branch": "feat/material-graph", "state": "closed",
     },
     "job-system": {
@@ -61,11 +61,11 @@ TRACKS = {
                 "PARALLEL-TRACKS 7.6; state CLOSED by user instruction 2026-11-13",
     },
     "action-system": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-action-system",
+        "wt": "",
         "branch": "feat/action-system", "state": "closed",
     },
     "console": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-console",
+        "wt": "",
         "branch": "feat/console", "state": "closed",
     },
     "ecs": {
@@ -76,7 +76,7 @@ TRACKS = {
                 "state CLOSED by user instruction 2026-11-13",
     },
     "pathfinding": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-pathfinding",
+        "wt": "",
         "branch": "feat/pathfinding", "state": "closed",
         "note": "M-N0~M-N6 merged to master 2026-11-11 (merge 5356c80 + "
                 "acceptance d3d6127; tag nav-done, branch milestone/nav-done); "
@@ -112,7 +112,7 @@ TRACKS = {
                 "state CLOSED by user instruction 2026-11-13",
     },
     "pbr-direct": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-pbr-direct",
+        "wt": "",
         "branch": "feat/pbr-direct", "state": "closed",
         "note": "merged to master e57173d (tag pbr-direct); wt removed 2026-11-09, branch kept",
     },
@@ -158,7 +158,7 @@ TRACKS = {
                 "fully done, reopen via §7.1b only",
     },
     "input": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-input",
+        "wt": "",
         "branch": "feat/input", "state": "closed",
         "note": "M-I0~M-I2 merged to master 0df16a0 (tags input-m0~input-m2) "
                 "2026-11-10; §7.1b reopen 2026-11-15: M-I3/M-I4/M-I5 CLOSED and "
@@ -172,7 +172,7 @@ TRACKS = {
                 "reopen via §7.1b (claim --force)",
     },
     "drive": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-drive",
+        "wt": "",
         "branch": "feat/drive", "state": "closed",
         "note": "A-class track opened 2026-11-10 by user instruction "
                 "(city-driving game-dev steps 2+3 merged; plan "
@@ -193,7 +193,7 @@ TRACKS = {
                 "2026-11-11 曾拆一次）；重开走 §7.1b",
     },
     "logging": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-logging",
+        "wt": "",
         "branch": "feat/logging", "state": "closed",
         "note": "A-class track opened 2026-11-11 by user instruction (Q-L1; plan "
                 "docs/p8/P8-LOG-PLAN.md); M-LOG0+M-LOG1+M-LOG2 closed (tags log-m0/log-m2) "
@@ -202,7 +202,7 @@ TRACKS = {
                 "state CLOSED by user instruction 2026-11-11 22:0x",
     },
     "profiling": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-profiling",
+        "wt": "",
         "branch": "feat/profiling", "state": "closed",
         "note": "A-class track opened 2026-11-11 by user instruction (Q1~Q6 "
                 "confirmed; plan docs/p8/P8-TRACY-PLAN.md): Tracy v0.15.0 "
@@ -342,7 +342,7 @@ TRACKS = {
                 "reopen via 7.1b",
     },
     "ui-rmlui": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-ui-rmlui",
+        "wt": "",
         "branch": "feat/ui-rmlui", "state": "closed",
         "note": "A-class UI track M-UI0 CLOSED 2026-11-15 (tag ui-rmlui "
                 "@ 22f636d; close gate PASS + release --done): vendored "
@@ -356,7 +356,7 @@ TRACKS = {
     },
     # ---- 波 1（2026-11-15 用户拍板 A A ①）: two independent game-support tracks ----
     "phys-query": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-phys-query",
+        "wt": "",
         "branch": "feat/phys-query", "state": "closed",
         "note": "M-PQ0 (A-class): general physics query API, Jolt-free public "
                 "POD header nl/physics/query.hpp + World.cpp narrow-phase "
@@ -374,7 +374,7 @@ TRACKS = {
                 "passed; reopen via 7.1b (claim --force)",
     },
     "sprite2d": {
-        "wt": "E:/UE_STUDY_2026/nl-engine-sprite2d",
+        "wt": "",
         "branch": "feat/sprite2d", "state": "closed",
         "note": "M-SP0 (B-class interleave, user approved 2026-11-15 option ①): "
                 "2D sprite batch rendering for Brotato world-space sprites. "
