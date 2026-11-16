@@ -1,2 +1,0 @@
-Source: OpenStreetMap data via Overpass API (c) OpenStreetMap contributors, ODbL 1.0.
-Derived products in this directory must carry this attribution when distributed.
