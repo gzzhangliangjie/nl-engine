@@ -5,7 +5,8 @@
 # 库形态（2026-11-15 citygen 库化拍板）：include/src 分离，CLI 只是壳；
 # nlohmann 类型不进公开头（选型闸第 5 条隔离）。
 add_library(citygen_core STATIC
-    src/osm.cpp)
+    src/osm.cpp
+    src/roadnet.cpp)
 target_include_directories(citygen_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${THIRDPARTY})  # <nlohmann/json.hpp> → thirdparty/nlohmann/json.hpp
@@ -37,3 +38,12 @@ set_tests_properties(cg0-sample PROPERTIES
 # ---- M-CG0.0：负向（非法输入显式退出 2）----
 add_test(NAME cg0-negative COMMAND citygen stats --input nonexistent.json)
 set_tests_properties(cg0-negative PROPERTIES WILL_FAIL TRUE)
+
+# ---- M-CG0.1：真实样本 → roadnet.json（fixture 同 CG0.0，计数锚以实测为准）----
+add_test(NAME cg0-convert
+    COMMAND citygen convert --input ${CMAKE_CURRENT_SOURCE_DIR}/test/zjx-sample.json
+            --bbox 23.108,113.316,23.130,113.342
+            --out ${CMAKE_CURRENT_SOURCE_DIR}/test/zjx-roadnet.json)
+set_tests_properties(cg0-convert PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
+    PASS_REGULAR_EXPRESSION "nodes=[0-9]+ edges=[0-9]+")

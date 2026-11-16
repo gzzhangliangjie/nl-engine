@@ -109,3 +109,4 @@ example/*/verify-*
 # 中间产物——上面的 *.obj 兜底规则会静默挡掉它们，此处根锚定反白。
 !example/*/blocks/*.obj
 assets/osm/
+bg-*.log
