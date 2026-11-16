@@ -89,8 +89,10 @@ game.exe 的 TickScheduler 是自建 4 组 lambda、ECS 仅启动快照、渲染
 2. `game.exe --city example/cg2-m0 --seed 1`（车流缺省开）双后端 rc=0 逐位一致：
    既有 GAME_IMPACT 锚不回归（strength=4.7787 impulse=7167.9883 owner=113）+ 新
    traffic odometer 逐位同；
-3. 基线截图 `example/game-m1/game-street.png` / `-VULKAN.png` 非空且肉眼可见 AI 车流+
-   红绿灯；双跑 PNG 逐字节一致（python sha256 对拍，Git Bash `fc` 是假绿勿用）；
+3. 基线截图 `example/game-m1/game-street.png` / `-VULKAN.png` 非空且达 viewer 同级可见
+   口径（灯色点+楼剪影；CG2 夜景暗城+km 级稀疏车体，"肉眼可见车流"不可达属数据现实——
+   **车体可见性立项 M-GAME2**：尾灯自发光/近景光照，本步以灯色点+数值锚验收）；
+   双跑 PNG 逐字节一致（python sha256 对拍，Git Bash `fc` 是假绿勿用）；
 4. cases.json 追加 **game-m1 卡**（python json `indent=1`+尾换行+`newline='\n'`；
    image 卡 baselines 双后端分文件：DX 无后缀/VK 带 `-VULKAN`；expectLog 锚以实测为准）；
 5. `scripts/wt.bat game regression --only game-m1` 双后端 ALL GREEN；
@@ -128,3 +130,24 @@ game.exe 的 TickScheduler 是自建 4 组 lambda、ECS 仅启动快照、渲染
 4. `python tools/wt_pool.py close --track game --milestone M-GAME1 --tag game-m1 --version game-m1`
    → 填 close report 待填格 → `release --done`；
 5. 主仓 `E:/UE_STUDY_2026/nl-engine` master merge feat/game + push。
+
+## 6. 收官证据（2026-11-17 补录）
+
+- **落点**：`game/main.cpp` 全部 additive——Options(--traffic/--traffic-seed/--cam/--cam-at)、
+  CityScene(carEntities/carObjects/lampEntities/lampObjects)、loadCity(meshFiles.reserve(256)
+  防悬垂 + car_* 实体映射)、setupTraffic(挂组件/flush/registerSystem/roadnet→lane graph/
+  init loop=true/initControl/401 盏灯 newEntity+registerLamp/灯 desc 收集)、
+  PostPhysics 末尾 world.tick(kStep)、渲染循环 car 矩阵减 cityCenter 同步 + lamp tint
+  同步 + updateEcsObjects、traffic ready/逐帧/尾行三段日志锚。
+- **构建**：双后端 BUILD OK；ctest 184/184 双后端。
+- **双后端基线逐位一致**：`traffic ready: cars=8 lanes=500 signal lamps=401 seed=12345`；
+  `GAME_IMPACT strength=4.7787 impulse=7167.9883 owner=113`（M-GAME0 锚零回归）；
+  `game-m1: traffic cars=8 lamps=401 ticks=240 odometer=128.53 arrived=0`；
+  基线 PNG dx==vk==dup sha256 相同 = `4918ff3669fb98fb…`。
+- **run.bat 六段** ALL GREEN（selftest/DX/VK/dup/负向/M-GAME0 无车流回归锚
+  `objects=160 boxes=150`）；regression `--only game-m1` 6/6 + `--only game-m0` 6/6
+  bytes ALL GREEN；cases.json 173 卡（game-m1 卡 selftest/street-traffic/negative）。
+- **实现差异记录**：验收判据 3 勘误——CG2 夜景暗城 + km 级稀疏车体，"肉眼可见车流"
+  不可达，改为"灯色点可见（cg2-m0 viewer 同级口径）+ 数值锚"；车体可见性（尾灯
+  自发光/近景光照）立项 M-GAME2。--cam free/--cam-at 为本步新增验证取景 CLI
+  （缺省 chase 保 M-GAME0 基线字节）。

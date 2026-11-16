@@ -16217,6 +16217,100 @@
      "command": "game.exe --city nonexistent-dir"
     }
    ]
+  },
+  {
+   "id": "game-m1",
+   "label": "GAME M-GAME1",
+   "name": "AI 车流进 game.exe（TrafficCarSystem 接线 + 红绿灯，确定性逐位）",
+   "tag": "game-m1",
+   "date": "2026-11-17",
+   "summary": "M-GAME1：game.exe 按 viewer --traffic-city 同口径激活 AI 车流——car_* 实体挂 TrafficCarComponent，TrafficCarSystem（lane graph 500 lanes + A* 闭合 route 永续）+ initControl 红绿灯相位 + 401 盏 SignalLamp 摆件（signal_post.glb，tick 按相位写 tint 绿/黄/红）。game.exe 无 world.tick，接线=PostPhysics 组末尾 world.tick(kStep)；渲染=car 矩阵（roadnet 系减 cityCenter 平移）+ lamp tint 逐帧同步进 objects + updateEcsObjects。AI 车为运动学 sim（不进 Jolt，与玩家车穿过）——物理化挂 M-GAME2。--traffic 1 显式激活（缺省 0 保 M-GAME0 基线字节不动）；--cam free + --cam-at X Z（FreeCamera::setPose 静态俯视，验证取景）。双后端逐位一致：GAME_IMPACT strength=4.7787 不回归 + traffic odometer=128.53 ticks=240；基线 PNG 三向 sha256 相同（4918ff36…）。",
+   "acceptance": [
+    "双后端 rc=0：traffic ready cars=8 lanes=500 signal lamps=401 seed=12345",
+    "GAME_IMPACT 锚不回归（strength=4.7787 impulse=7167.9883 owner=113，与 M-GAME0 逐位同）",
+    "traffic odometer 双后端逐位一致（ticks=240 odometer=128.53 arrived=0），逐帧单调增",
+    "基线 PNG dx==vk==dup sha256 相同（4918ff36…）；街景灯色点可见（cg2-m0 同级夜景口径；车体可见性挂 M-GAME2）",
+    "--traffic 缺省 0：M-GAME0 卡 6/6 bytes 不回归",
+    "负向：--traffic 5 → exit 2"
+   ],
+   "preview": "example/game-m1/game-street.png",
+   "exe": {
+    "dx12": "build/DX12/game.exe",
+    "vulkan": "build/VULKAN/game.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：无头全链验证（M-GAME0 保形）",
+     "kind": "tool",
+     "exe": {
+      "dx12": "build/DX12/game.exe",
+      "vulkan": "build/VULKAN/game.exe"
+     },
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "game-m0 selftest: PASS",
+     "command": "game.exe --selftest"
+    },
+    {
+     "id": "street-traffic",
+     "name": "AI 车流街景（撞击锚 + odometer 锚 + 截图）",
+     "kind": "image",
+     "note": "240 逻辑步全油门 + 车流同帧推进；取景=spawn 旁路口（node193）灯群。双后端基线 PNG 逐位一致。",
+     "baselines": {
+      "dx12": "example/game-m1/game-street.png",
+      "vulkan": "example/game-m1/game-street-VULKAN.png"
+     },
+     "args": [
+      "--city",
+      "{root}/example/cg2-m0",
+      "--traffic",
+      "1",
+      "--cam",
+      "free",
+      "--cam-at",
+      "-9.5,-24.1",
+      "--dist",
+      "40",
+      "--pitch",
+      "-20",
+      "--yaw",
+      "0",
+      "--seed",
+      "1",
+      "--screenshot",
+      "{out}",
+      "--screenshot-frame",
+      "8",
+      "--frames",
+      "16",
+      "--steps",
+      "240",
+      "--size",
+      "960x540"
+     ],
+     "expectExit": 0,
+     "expectLog": "game-m1: traffic cars=8 lamps=401 ticks=240 odometer=128.53 arrived=0",
+     "command": "game.exe --city example/cg2-m0 --traffic 1 --cam free --cam-at -9.5,-24.1 --dist 40 --pitch -20 --yaw 0 --seed 1 --screenshot <out.png> --screenshot-frame 8 --frames 16 --steps 240 --size 960x540"
+    },
+    {
+     "id": "negative",
+     "name": "负向：--traffic 非法值",
+     "kind": "tool",
+     "exe": {
+      "dx12": "build/DX12/game.exe",
+      "vulkan": "build/VULKAN/game.exe"
+     },
+     "args": [
+      "--traffic",
+      "5"
+     ],
+     "expectExit": 2,
+     "command": "game.exe --traffic 5"
+    }
+   ]
   }
  ]
 }

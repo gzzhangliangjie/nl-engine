@@ -25,6 +25,9 @@
 #include "nl/audio/AudioWorld.hpp"
 #include "nl/scene/World.hpp"
 #include "nl/scene/Component.hpp"
+#include "nl/scene/TrafficCarComponent.hpp"  // M-GAME1: AI traffic cars
+#include "nl/scene/SignalLampComponent.hpp"  // M-GAME1: signal lamp entities
+#include "nl/traffic/TrafficCarSystem.hpp"   // M-GAME1: lane-graph traffic sim
 #include "nl/renderer/renderer.hpp"
 
 #include <nlohmann/json.hpp>
@@ -76,6 +79,13 @@ struct Options {
     int steps = 240;              // logic frames total
     std::uint32_t seed = 1;
     float yaw = 28.0f, pitch = -10.0f, dist = 30.0f;  // free-cam fallback
+    // M-GAME1: AI traffic (kinematic lane-graph sim, NOT Jolt bodies — cars
+    // pass through the player chassis by design; see GAME1-PLAN.md §0).
+    // Default 0 keeps the M-GAME0 baseline bytes untouched; --traffic 1 opts in.
+    int traffic = 0;
+    unsigned long long trafficSeed = 12345;
+    std::string cam = "chase";   // chase | free (M-GAME1 aerial verification)
+    float camAtX = 0.0f, camAtZ = 0.0f;   // --cam-at X Z: free eye ground pos
 };
 
 void usage() {
@@ -85,6 +95,7 @@ void usage() {
         "  game.exe [--city DIR] [--screenshot PATH] [--frames N] [--steps N]\n"
         "           [--size WxH] [--seed N] [--play-script FILE] [--no-hud]\n"
         "           [--audio-realtime]  (default audio = offline, headless-safe)\n"
+        "           [--traffic 0|1] [--traffic-seed N]  (M-GAME1 AI traffic)\n"
         "exit: 0 pass / 1 runtime / 2 usage\n");
 }
 
@@ -128,6 +139,19 @@ int parseArgs(int argc, char** argv, Options* o) {
         } else if (a == "--seed") {
             std::string v; if (!need("--seed", &v)) return 2;
             o->seed = static_cast<std::uint32_t>(std::strtoul(v.c_str(), nullptr, 10));
+        } else if (a == "--traffic") {
+            std::string v; if (!need("--traffic", &v)) return 2;
+            o->traffic = std::atoi(v.c_str());
+            if (o->traffic != 0 && o->traffic != 1) return 2;
+        } else if (a == "--traffic-seed") {
+            std::string v; if (!need("--traffic-seed", &v)) return 2;
+            o->trafficSeed = std::strtoull(v.c_str(), nullptr, 10);
+        } else if (a == "--cam") {
+            if (!need("--cam", &o->cam)) return 2;
+            if (o->cam != "chase" && o->cam != "free") return 2;
+        } else if (a == "--cam-at") {
+            std::string v; if (!need("--cam-at", &v)) return 2;
+            if (std::sscanf(v.c_str(), "%f,%f", &o->camAtX, &o->camAtZ) != 2) return 2;
         } else if (a == "--yaw") {
             std::string v; if (!need("--yaw", &v)) return 2; o->yaw = std::atof(v.c_str());
         } else if (a == "--pitch") {
@@ -227,6 +251,11 @@ struct CityScene {
     float ambient = 0.28f;
     int buildingBoxes = 0;
     int playerObject = -1;   // index into objects[] driven by the live chassis
+    // M-GAME1: AI traffic entity -> objects[] index maps (parallel vectors).
+    std::vector<nl::scene::EntityID> carEntities;   // car_* entities (TrafficCarComponent)
+    std::vector<int> carObjects;                    // objects[] index per car
+    std::vector<nl::scene::EntityID> lampEntities;  // signal_* entities
+    std::vector<int> lampObjects;                   // objects[] index per lamp
     bool ok = false;
 };
 
@@ -244,6 +273,11 @@ bool loadCity(const Options& o, CityScene* cs, std::string* err) {
         cs->ambient = doc["ambient"].get<float>();
 
     // Entity -> render desc (same collection logic as viewer runScene).
+    // Reserve meshFiles UP FRONT: desc.meshFile stores c_str() into these
+    // strings, so any later push_back that reallocates would dangle every
+    // existing pointer. 256 covers 150 boxes + tower + 8 cars + player +
+    // ~30 signal lamps with headroom (M-GAME1 appends lamps post-load).
+    cs->meshFiles.reserve(256);
     std::vector<nl::scene::EntityID> modelIds;
     for (nl::scene::EntityID id : cs->world.getEntityIDs()) {
         const auto* light = cs->world.getComponent<nl::scene::LightComponent>(id);
@@ -299,11 +333,139 @@ bool loadCity(const Options& o, CityScene* cs, std::string* err) {
         cs->objects.push_back(d);
         cs->playerObject = kPlayerObjectIndex;
     }
+    // M-GAME1: record car_* entities -> objects[] indices (objects index ==
+    // modelIds index for every entry before the player placeholder).
+    for (std::size_t k = 0; k < modelIds.size(); ++k) {
+        if (cs->world.getName(modelIds[k]).rfind("car_", 0) != 0) continue;
+        cs->carEntities.push_back(modelIds[k]);
+        cs->carObjects.push_back(static_cast<int>(k));
+    }
     // NOTE: no key-light injection. CG2 is a night city (emissive windows baked
     // in the facade textures); viewer --traffic-city renders it with ZERO lights
     // and that is the target look. The earlier "all black" screenshot was the
     // camera INSIDE a giant slab (pre-spawn-fix), not a lighting problem.
     cs->ok = true;
+    return true;
+}
+
+// ---- M-GAME1: AI traffic activation (viewer --traffic-city parity) ----
+// Kinematic lane-graph sim via nl::traffic::TrafficCarSystem (NOT Jolt): cars
+// pass through the player chassis by design (GAME1-PLAN.md §0). Wires the
+// cg2-m0 car_* entities, registers the ECS system, builds signal lamps, and
+// appends lamp render descs. Caller ticks via world.tick() in PostPhysics.
+bool setupTraffic(const Options& o, CityScene* cs, std::string* err) {
+    cs->world.getComponentLibrary().registerComponent<nl::scene::TrafficCarComponent>();
+    int carsTagged = 0;
+    for (nl::scene::EntityID id : cs->carEntities) {
+        cs->world.addComponent(
+            id, std::make_unique<nl::scene::TrafficCarComponent>(
+                    nl::scene::Entity{id, &cs->world}));
+        ++carsTagged;
+    }
+    if (carsTagged == 0) { *err = "traffic: no car_* entities in scene"; return false; }
+    cs->world.flushEntityCreationAndRemoval();
+    cs->world.registerSystem(std::make_unique<nl::traffic::TrafficCarSystem>(cs->world));
+    auto* sys = static_cast<nl::traffic::TrafficCarSystem*>(
+        cs->world.findSystem(nl::traffic::TrafficCarSystem::kName));
+
+    // roadnet.json lives next to city.scene.engine (citygen interface output).
+    const std::string roadnetPath =
+        (std::filesystem::path(o.city) / "roadnet.json").generic_string();
+    std::ifstream rf(roadnetPath, std::ios::binary);
+    if (!rf) { *err = "traffic: cannot open " + roadnetPath; return false; }
+    std::string jsonBytes((std::istreambuf_iterator<char>(rf)),
+                          std::istreambuf_iterator<char>());
+    nl::traffic::LaneGraph laneGraph;
+    std::string gerr;
+    if (!nl::traffic::buildLaneGraphFromRoadnetJson(
+            jsonBytes.data(), jsonBytes.size(), &laneGraph, &gerr)) {
+        *err = "traffic: lane graph failed: " + gerr;
+        return false;
+    }
+    nl::traffic::TrafficSimParams simParams{};
+    simParams.loop = true;   // closed-route perpetual traffic (TRAFFIC-PLAN §11.2)
+    std::string ierr;
+    if (!sys->init(laneGraph, simParams, o.trafficSeed, ierr)) {
+        *err = "traffic: system init failed: " + ierr;
+        return false;
+    }
+    // Signal phases + lamp entities (M-T4 parity with viewer --traffic-city).
+    if (!sys->initControl(jsonBytes.data(), jsonBytes.size(), true, ierr)) {
+        *err = "traffic: control init failed: " + ierr;
+        return false;
+    }
+    cs->world.getComponentLibrary().registerComponent<nl::scene::SignalLampComponent>();
+    int lampsCreated = 0;
+    for (const nl::traffic::NodeControl& nc : sys->control().nodes) {
+        if (!nc.signal) continue;   // lock-only node has no lamp
+        for (int grp = 0; grp < 2; ++grp) {
+            for (std::int32_t edgeId : nc.groups[grp]) {
+                // Rightmost lane of this entry edge = offset-max (RHT rule).
+                const nl::traffic::Lane* lane = nullptr;
+                for (const nl::traffic::Lane& L : laneGraph.lanes) {
+                    if (L.edgeId != edgeId) continue;
+                    if (!lane || L.offset > lane->offset) lane = &L;
+                }
+                if (!lane || lane->points.size() < 2) continue;
+                const auto& pts = lane->points;
+                const float ex = pts.back().x, ez = pts.back().z;
+                float fx = ex - pts[pts.size() - 2].x;
+                float fz = ez - pts[pts.size() - 2].z;
+                const float fl = std::sqrt(fx * fx + fz * fz);
+                if (fl < 1e-6f) continue;
+                fx /= fl; fz /= fl;               // travel direction (towards node)
+                const float rx = fz, rz = -fx;    // RHT right = (fz, -fx)
+                const float off = lane->offset > 0.0f ? lane->offset : 0.0f;
+                // Stop line (entryStop before node) right side: curb + 1.2m.
+                const float px = ex - fx * 2.5f + rx * (off + 1.2f);
+                const float pz = ez - fz * 2.5f + rz * (off + 1.2f);
+                // +Z panel faces oncoming traffic = model +Z towards -forward.
+                const float vyaw = std::atan2(-fx, -fz) * 0.5f;
+                auto ent = cs->world.newEntity(
+                    "signal_" + std::to_string(nc.nodeId) + "_" +
+                    std::to_string(edgeId));
+                auto* tr = static_cast<nl::scene::TransformComponent*>(
+                    &ent.addComponent(
+                        std::make_unique<nl::scene::TransformComponent>(ent)));
+                tr->local.position = {px, 0.0f, pz};
+                tr->local.rotation = {0.0f, std::sin(vyaw), 0.0f, std::cos(vyaw)};
+                auto* mo = static_cast<nl::scene::ModelComponent*>(
+                    &ent.addComponent(
+                        std::make_unique<nl::scene::ModelComponent>(ent)));
+                mo->meshFile = "signal_post.glb";
+                mo->tint = {0.10f, 0.85f, 0.15f};   // green until first tick
+                ent.addComponent(
+                    std::make_unique<nl::scene::SignalLampComponent>(ent));
+                if (!sys->registerLamp(ent.getID(), nc.nodeId, edgeId, ierr)) {
+                    *err = "traffic: registerLamp failed: " + ierr;
+                    return false;
+                }
+                ++lampsCreated;
+            }
+        }
+    }
+    cs->world.flushEntityCreationAndRemoval();   // lamp entities hit the tables
+    // Collect lamp render descs (meshFiles was reserved up front in loadCity,
+    // so this push_back cannot reallocate and dangle earlier desc.meshFile).
+    cs->meshFiles.push_back("signal_post.glb");
+    const char* lampMesh = cs->meshFiles.back().c_str();
+    for (nl::scene::EntityID id : cs->world.getEntityIDs()) {
+        const auto* lamp = cs->world.getComponent<nl::scene::SignalLampComponent>(id);
+        if (!lamp) continue;
+        const auto* mo = cs->world.getComponent<nl::scene::ModelComponent>(id);
+        const auto* tr = cs->world.getComponent<nl::scene::TransformComponent>(id);
+        if (!mo || !tr) continue;
+        nl::renderer::SceneObjectDesc d{};
+        const auto wm = tr->getWorldMatrix();
+        std::memcpy(d.world, wm.m, sizeof(d.world));
+        d.tint[0] = mo->tint.x; d.tint[1] = mo->tint.y; d.tint[2] = mo->tint.z;
+        d.meshFile = lampMesh;
+        cs->lampObjects.push_back(static_cast<int>(cs->objects.size()));
+        cs->lampEntities.push_back(id);
+        cs->objects.push_back(d);
+    }
+    std::printf("game: traffic ready: cars=%d lanes=%zu signal lamps=%d seed=%llu\n",
+                carsTagged, laneGraph.laneCount(), lampsCreated, o.trafficSeed);
     return true;
 }
 
@@ -451,6 +613,19 @@ int runGame(const Options& o) {
     std::printf("game: city loaded: %zu objects, %zu lights, ambient %.2f\n",
                 city.objects.size(), city.lights.size(), city.ambient);
 
+    // 1b) M-GAME1: AI traffic (opt-in via --traffic 1; default 0 keeps the
+    //     M-GAME0 baseline bytes untouched). Lamp descs enter city.objects
+    //     BEFORE loadEcsScene upload and BEFORE the post-collision median
+    //     shift loop, which then shifts lamp matrices like every other object.
+    //     Lamp/car component coordinates stay in roadnet space (already
+    //     median-normalised by citygen2engine); the render sync below applies
+    //     the same cityCenter shift as the buildings.
+    const bool trafficOn = resolved.traffic != 0;
+    if (trafficOn && !setupTraffic(resolved, &city, &err)) {
+        std::printf("game: %s\n", err.c_str());
+        return 1;
+    }
+
     // 2) Physics scene (scenario 2 driving ground) + city static boxes.
     //    Built AFTER the renderer in the final layout; see below. Declared here
     //    only so lambdas can capture it.
@@ -465,14 +640,24 @@ int runGame(const Options& o) {
     Feedback fb;
 
     // 4) Camera director (Chase, fed by chassisState each logic tick).
+    //    M-GAME1: --cam free = static aerial pose (city-scale traffic/lamp
+    //    verification shot); default chase keeps the M-GAME0 baseline bytes.
     nl::core::CameraDirector camera;
-    camera.setMode(nl::core::CameraDirector::Mode::Chase);
+    camera.setMode(resolved.cam == "free" ? nl::core::CameraDirector::Mode::Free
+                                          : nl::core::CameraDirector::Mode::Chase);
     camera.setAspect(float(resolved.width) / float(resolved.height));
     camera.setFovYDegrees(60.0f);
     camera.setFarZ(4000.0f);
     camera.chase().setDistance(12.0f);      // default 6m clips the player glb
     camera.chase().setHeightOffset(3.0f);   // raise the boom: see over tier1 roofs
     camera.chase().setPitchDegrees(-14.0f); // slight downward: skyline in frame
+    if (resolved.cam == "free") {
+        // Aerial: eye above --cam-at (dist doubles as altitude), pitch from
+        // --pitch (clamped by FreeCamera), yaw from --yaw. Static pose.
+        const float eye[3] = {resolved.camAtX, std::max(resolved.dist, 120.0f),
+                              resolved.camAtZ};
+        camera.free().setPose(eye, resolved.yaw, resolved.pitch);
+    }
 
     // 5) Window + renderer (sceneMode, like viewer runScene).
     nl::core::WindowDesc wd;
@@ -587,6 +772,11 @@ int runGame(const Options& o) {
         nl::core::DirectorInputs di{};
         di.chassis = cs.valid ? &cs : nullptr;
         camera.update(static_cast<float>(nl::core::GameClock::kStep), di);
+        // M-GAME1: advance AI traffic AFTER physics (same fixed step, same
+        // determinism contract). Car poses + lamp tints land in ECS components;
+        // the render loop syncs them into city.objects with the cityCenter
+        // shift applied (component space = roadnet space, already normalised).
+        if (trafficOn) city.world.tick(nl::core::GameClock::kStep);
         latestChassis = d;
         ++logicFrame;
     });
@@ -603,6 +793,16 @@ int runGame(const Options& o) {
         // Advance the fixed-step clock for this rendered frame.
         for (int s = 0; s < stepsPerFrame && logicFrame < resolved.steps; ++s)
             clock.tick(nl::core::GameClock::kStep * 1000.0);
+        // M-GAME1: traffic log anchor (viewer --traffic-city parity; run.bat
+        // findstr source; odometer must grow monotonically frame over frame).
+        if (trafficOn) {
+            auto* sys = static_cast<nl::traffic::TrafficCarSystem*>(
+                city.world.findSystem(nl::traffic::TrafficCarSystem::kName));
+            std::printf("traffic: frame=%d ticks=%llu odometer=%.2f arrived=%d\n",
+                        rendered,
+                        static_cast<unsigned long long>(sys->stepCount()),
+                        sys->totalOdometer(), sys->arrivedCount());
+        }
         // Shake offsets apply to the view (deterministic, no wall-clock).
         float sy=0, sp=0, sr=0;
         fb.trauma.offsets(sy, sp, sr);
@@ -622,6 +822,34 @@ int runGame(const Options& o) {
             if (!renderer->updateEcsObjects(city.objects.data(),
                                             static_cast<std::uint32_t>(city.objects.size()))) {
                 std::printf("game: updateEcsObjects (player car) failed\n");
+                return 1;
+            }
+        }
+        // M-GAME1: sync AI traffic into render objects. Car matrices come from
+        // the ECS Transform (roadnet space) minus the cityCenter shift used by
+        // every other object; lamp tints come from ModelComponent (traffic sim
+        // writes green/amber/red per phase each tick).
+        if (trafficOn) {
+            for (std::size_t i = 0; i < city.carObjects.size(); ++i) {
+                const auto* t = city.world.getComponent<nl::scene::TransformComponent>(
+                    city.carEntities[i]);
+                if (!t) continue;
+                const auto wm = t->getWorldMatrix();
+                float* w = city.objects[static_cast<std::size_t>(city.carObjects[i])].world;
+                std::memcpy(w, wm.m, sizeof(float) * 16);
+                w[12] -= cityCenter[0];
+                w[14] -= cityCenter[2];
+            }
+            for (std::size_t i = 0; i < city.lampObjects.size(); ++i) {
+                const auto* mo = city.world.getComponent<nl::scene::ModelComponent>(
+                    city.lampEntities[i]);
+                if (!mo) continue;
+                auto& d = city.objects[static_cast<std::size_t>(city.lampObjects[i])];
+                d.tint[0] = mo->tint.x; d.tint[1] = mo->tint.y; d.tint[2] = mo->tint.z;
+            }
+            if (!renderer->updateEcsObjects(city.objects.data(),
+                                            static_cast<std::uint32_t>(city.objects.size()))) {
+                std::printf("game: updateEcsObjects (traffic) failed\n");
                 return 1;
             }
         }
@@ -666,6 +894,15 @@ int runGame(const Options& o) {
                 ds.valid ? ds.pos[0] : 0.0f, ds.valid ? ds.pos[1] : 0.0f,
                 ds.valid ? ds.pos[2] : 0.0f, fb.trauma.trauma01());
     if (!shot.empty()) std::printf("game: screenshot written: %s\n", shot.c_str());
+    // M-GAME1: traffic summary anchor (deterministic: identical across backends).
+    if (trafficOn) {
+        auto* sys = static_cast<nl::traffic::TrafficCarSystem*>(
+            city.world.findSystem(nl::traffic::TrafficCarSystem::kName));
+        std::printf("game-m1: traffic cars=%zu lamps=%zu ticks=%llu odometer=%.2f arrived=%d\n",
+                    city.carObjects.size(), city.lampObjects.size(),
+                    static_cast<unsigned long long>(sys->stepCount()),
+                    sys->totalOdometer(), sys->arrivedCount());
+    }
     return 0;
 }
 

@@ -1,0 +1,19 @@
+{
+  "version": 1,
+  "landmarks": [
+    {
+      "osmId": 184738716,
+      "name": "广州国际金融中心(广州西塔)",
+      "mesh": "west_tower.glb",
+      "scale": 1.0
+    },
+    {
+      "name": "广州塔",
+      "lat": 23.1066,
+      "lon": 113.3246,
+      "mesh": "canton_tower.glb",
+      "scale": 1.0,
+      "heightM": 620.3
+    }
+  ]
+}
