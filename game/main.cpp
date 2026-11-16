@@ -16,6 +16,7 @@
 #include "nl/physics/World.hpp"
 #include "nl/physics/query.hpp"
 #include "nl/core/game_clock.hpp"
+#include "nl/core/weather.hpp"  // M-CITY-LIT: day/weather chain (viewer M-WEA1 same)
 #include "nl/core/tick_groups.hpp"
 #include "nl/core/camera_director.hpp"
 #include "nl/core/camera_smoother.hpp"
@@ -64,6 +65,24 @@ extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 0x00
 
 namespace {
 
+// M-CITY-LIT: color temperature K -> linear RGB (Krystof fit; viewer-side
+// sole impl, shared here so the injected sun light and fp.weatherSunCol
+// always agree).
+void sunColorFromTempK(double tempK, float out[3]) {
+    const double tk = tempK / 100.0;
+    const double r = tk <= 66.0 ? 1.0
+        : 1.292936186062745 * std::pow(tk - 60.0, -0.1332047592);
+    const double g = tk <= 66.0
+        ? 0.3900815787690196 * std::log(std::max(tk, 1e-9)) - 0.631841443788627
+        : 1.129890860895294 * std::pow(tk - 60.0, -0.0755148492);
+    const double b = tk >= 66.0 ? 1.0
+        : (tk <= 19.0 ? 0.0
+                      : 0.5432067891102761 * std::log(tk - 10.0) - 1.19625408914);
+    out[0] = static_cast<float>(std::clamp(r, 0.0, 1.0));
+    out[1] = static_cast<float>(std::clamp(g, 0.0, 1.0));
+    out[2] = static_cast<float>(std::clamp(b, 0.0, 1.0));
+}
+
 struct Options {
     bool selftest = false;
     bool verbose = false;
@@ -78,6 +97,12 @@ struct Options {
     int frames = 8;               // rendered frames before screenshot
     int steps = 240;              // logic frames total
     std::uint32_t seed = 1;
+    // M-CITY-LIT: day/weather chain (viewer --weather-* same semantics).
+    int weatherSeed = -1;              // >=0 enables the chain
+    double weatherT = 43200.0;         // fixed time-of-day seconds (noon default)
+    std::string weatherPreset = "clear";
+    bool skyBg = false;                // analytic sky background pass
+    bool ground = false;               // M-CITY-LIT: ground slab (see loadCity)
     float yaw = 28.0f, pitch = -10.0f, dist = 30.0f;  // free-cam fallback
     // M-GAME1: AI traffic (kinematic lane-graph sim, NOT Jolt bodies — cars
     // pass through the player chassis by design; see GAME1-PLAN.md §0).
@@ -152,6 +177,28 @@ int parseArgs(int argc, char** argv, Options* o) {
         } else if (a == "--cam-at") {
             std::string v; if (!need("--cam-at", &v)) return 2;
             if (std::sscanf(v.c_str(), "%f,%f", &o->camAtX, &o->camAtZ) != 2) return 2;
+        } else if (a == "--day") {
+            // M-CITY-LIT shortcut: noon clear sky (kDayLength=600s -> t=300)
+            // + analytic sky background + ground slab.
+            o->weatherSeed = 7;
+            o->weatherT = 300.0;
+            o->weatherPreset = "clear";
+            o->skyBg = true;
+            o->ground = true;
+        } else if (a == "--ground") {
+            o->ground = true;
+        } else if (a == "--weather-seed") {
+            std::string v; if (!need("--weather-seed", &v)) return 2;
+            o->weatherSeed = std::atoi(v.c_str());
+        } else if (a == "--weather-t") {
+            std::string v; if (!need("--weather-t", &v)) return 2;
+            o->weatherT = std::atof(v.c_str());
+        } else if (a == "--weather-preset") {
+            if (!need("--weather-preset", &o->weatherPreset)) return 2;
+            if ((int)nl::core::weatherKindFromName(o->weatherPreset.c_str()) ==
+                (int)nl::core::WeatherKind::kCount) return 2;
+        } else if (a == "--sky-bg") {
+            o->skyBg = true;
         } else if (a == "--yaw") {
             std::string v; if (!need("--yaw", &v)) return 2; o->yaw = std::atof(v.c_str());
         } else if (a == "--pitch") {
@@ -332,6 +379,44 @@ bool loadCity(const Options& o, CityScene* cs, std::string* err) {
         d.meshFile = cs->meshFiles.back().c_str();
         cs->objects.push_back(d);
         cs->playerObject = kPlayerObjectIndex;
+    }
+    // M-CITY-LIT: ground plane. CG2 has zero ground entities (buildings float
+    // over the clear color) -> append one slab using the SAME shared box mesh
+    // (scale is full-size per Transform convention). Thin box: top face at
+    // y=0 exactly where the implicit physics ground plane lives. Bounding box
+    // from the building transforms (+20% margin so the horizon never ends
+    // mid-block). Append AFTER the player placeholder -> car/lamp indices
+    // (recorded from modelIds positions) stay valid.
+    if (o.ground) {
+        float minx = 0.f, maxx = 0.f, minz = 0.f, maxz = 0.f;
+        bool any = false;
+        for (nl::scene::EntityID id : modelIds) {
+            const auto* t = cs->world.getComponent<nl::scene::TransformComponent>(id);
+            if (!t) continue;
+            const float sx = std::abs(t->local.scale.x) * 0.5f;
+            const float sz = std::abs(t->local.scale.z) * 0.5f;
+            minx = any ? std::min(minx, t->local.position.x - sx) : t->local.position.x - sx;
+            maxx = any ? std::max(maxx, t->local.position.x + sx) : t->local.position.x + sx;
+            minz = any ? std::min(minz, t->local.position.z - sz) : t->local.position.z - sz;
+            maxz = any ? std::max(maxz, t->local.position.z + sz) : t->local.position.z + sz;
+            any = true;
+        }
+        if (any) {
+            const float cx = (minx + maxx) * 0.5f, cz = (minz + maxz) * 0.5f;
+            const float w = (maxx - minx) * 0.6f + 100.0f;
+            const float dpt = (maxz - minz) * 0.6f + 100.0f;
+            cs->meshFiles.push_back(cs->meshFiles.front());  // shared box mesh
+            nl::renderer::SceneObjectDesc g{};
+            // Column-major T*S: scale (w,2,dpt) then translate (cx,-1,cz).
+            g.world[0] = w; g.world[5] = 2.0f; g.world[10] = dpt;
+            g.world[12] = cx; g.world[13] = -1.0f; g.world[14] = cz;
+            g.world[15] = 1.0f;
+            g.tint[0] = 0.42f; g.tint[1] = 0.43f; g.tint[2] = 0.45f;
+            g.meshFile = cs->meshFiles.back().c_str();
+            cs->objects.push_back(g);
+            std::printf("game: ground slab %.0fx%.0f at (%.0f, %.0f)\n",
+                        w, dpt, cx, cz);
+        }
     }
     // M-GAME1: record car_* entities -> objects[] indices (objects index ==
     // modelIds index for every entry before the player placeholder).
@@ -613,6 +698,41 @@ int runGame(const Options& o) {
     std::printf("game: city loaded: %zu objects, %zu lights, ambient %.2f\n",
                 city.objects.size(), city.lights.size(), city.ambient);
 
+    // 1a) M-CITY-LIT: inject the weather sun as a directional shadow light.
+    //     ECS scene chain direct light = the lights array (pscene g_lights);
+    //     the weather chain only modulates ambient/sky/fog. Direction = light
+    //     propagation (SceneLightDesc convention) = -(towards-sun). First in
+    //     the array so it takes shadow slot 0 (kMaxShadowLights prefix rule).
+    if (resolved.weatherSeed >= 0) {
+        const nl::core::WeatherState ws = nl::core::evaluateWeather(
+            static_cast<std::uint64_t>(resolved.weatherSeed),
+            resolved.weatherT,
+            nl::core::weatherKindFromName(resolved.weatherPreset.c_str()));
+        const double ce = std::cos(ws.sunElevation);
+        const double se = std::sin(ws.sunElevation);
+        nl::renderer::SceneLightDesc sun{};
+        sun.dir[0] = static_cast<float>(-(ce * std::sin(ws.sunAzimuth)));
+        sun.dir[1] = static_cast<float>(-se);
+        sun.dir[2] = static_cast<float>(-(ce * std::cos(ws.sunAzimuth)));
+        sunColorFromTempK(ws.sunColorTempK, sun.color);
+        // ECS chain brightness carrier = light COLOR (shader multiplies
+        // Lo_dir by 1/sumIntensity, cancelling `intensity`; E1b anchor
+        // comment: "ambient 0.55 / light color x2.8"). Gain 8 -> effective
+        // ~2.5x albedo direct light = daylight key.
+        constexpr float kSunGain = 8.0f;
+        sun.color[0] *= kSunGain; sun.color[1] *= kSunGain; sun.color[2] *= kSunGain;
+        sun.intensity = 2.2f * static_cast<float>(ws.sunIntensity);
+        sun.type = 0;        // directional
+        sun.shadow = true;   // M-E1b.4 cast-shadow directional light
+        // Daytime ambient floor: scene JSON carries the night value 0.28 and
+        // weatherAmbientScale can only attenuate, never raise.
+        city.ambient = std::max(city.ambient, 0.55f);
+        city.lights.insert(city.lights.begin(), sun);
+        std::printf("game: day sun injected: elev=%.1fdeg az=%.1fdeg I=%.2f\n",
+                    ws.sunElevation * 57.2957795, ws.sunAzimuth * 57.2957795,
+                    sun.intensity);
+    }
+
     // 1b) M-GAME1: AI traffic (opt-in via --traffic 1; default 0 keeps the
     //     M-GAME0 baseline bytes untouched). Lamp descs enter city.objects
     //     BEFORE loadEcsScene upload and BEFORE the post-collision median
@@ -859,6 +979,38 @@ int runGame(const Options& o) {
         std::memcpy(fp.model, vp.m, sizeof(fp.model));
         fp.cullBack = true;
         fp.shading = 0;        // textured (ECS scene GLBs carry baked facade tiers)
+        // M-CITY-LIT: weather chain (viewer M-WEA1 same fields; fixed t =
+        // deterministic bytes). Sun dir/energy/col + sky two colors + fog.
+        if (resolved.weatherSeed >= 0) {
+            nl::core::WeatherState ws = nl::core::evaluateWeather(
+                static_cast<std::uint64_t>(resolved.weatherSeed),
+                resolved.weatherT,
+                nl::core::weatherKindFromName(resolved.weatherPreset.c_str()));
+            const double ce = std::cos(ws.sunElevation);
+            const double se = std::sin(ws.sunElevation);
+            fp.lightDir[0] = static_cast<float>(ce * std::sin(ws.sunAzimuth));
+            fp.lightDir[1] = static_cast<float>(se);
+            fp.lightDir[2] = static_cast<float>(ce * std::cos(ws.sunAzimuth));
+            fp.lightDir[3] = 0.28f * static_cast<float>(ws.sunIntensity);
+            fp.weatherAmbientScale =
+                static_cast<float>(std::clamp(ws.sunIntensity, 0.0, 1.0));
+            fp.weatherSunIntensity = static_cast<float>(ws.sunIntensity);
+            float sunCol[3];
+            sunColorFromTempK(ws.sunColorTempK, sunCol);
+            fp.weatherSunCol[0] = sunCol[0];
+            fp.weatherSunCol[1] = sunCol[1];
+            fp.weatherSunCol[2] = sunCol[2];
+            fp.weatherZenith[0] = static_cast<float>(ws.skyZenithR);
+            fp.weatherZenith[1] = static_cast<float>(ws.skyZenithG);
+            fp.weatherZenith[2] = static_cast<float>(ws.skyZenithB);
+            fp.weatherHorizon[0] = static_cast<float>(ws.skyHorizonR);
+            fp.weatherHorizon[1] = static_cast<float>(ws.skyHorizonG);
+            fp.weatherHorizon[2] = static_cast<float>(ws.skyHorizonB);
+            fp.weatherFogDensity = static_cast<float>(ws.fogDensity);
+            fp.weatherFogHeight  = static_cast<float>(ws.fogHeight);
+            fp.weatherWetness    = static_cast<float>(ws.groundWetness);
+            fp.sceneSkyBg = resolved.skyBg;
+        }
         nl::renderer::HudFrame hud{};
         hud.backend = "game";
         hud.panelShow = !resolved.noHud;
