@@ -1,0 +1,14 @@
+[nl:info] window created 960x540 | no GL context | drag=orbit, wheel=zoom, C=cull, R=reset, ESC=quit
+game: city loaded: 160 objects, 0 lights, ambient 0.28
+[nl:info|renderer] features: rayQuery=1 shaderInt64Atomics=1 indirectDraw=1
+[nl:info|renderer] HUD ready: ImGui 1.91.9 | font atlas 512x64 | shader=dxil
+[nl:info|renderer] device ready: NVIDIA GeForce RTX 4060 Laptop GPU | D3D12 Debug Layer unavailable + NVRHI validation | swapchain 960x540
+[nl:info|scene] ecs scene ready: city.scene.engine | objects=160 lights=0 ambient=0.28 shadowLights=0 | batches=25 | triangles=52704 | shader=dxil
+[nl:info|scene] t0: offscreen HDR scene targets ready (raster path)
+game: feedback ready: audio=on
+game: physics ready: 150 city collision boxes, chassis spawn (0.0, -35.0)
+[nl:info|renderer] gpu timer resolved [frame]: 0.07168 ms (first successful NVRHI timestamp query)
+[nl:info] window destroyed
+GAME_IMPACT frame_hits=1 owner=113 strength=4.7787 impulse=7167.9883 pos=(87.16,4.50,3.28)
+game-m0: frames=16 steps=240 objects=160 boxes=150 hits=1 speed=0.027 odometer_pos=(-0.00,0.86,-30.33) shake=0.0000
+game: screenshot written: example/game-m0/game-street.png

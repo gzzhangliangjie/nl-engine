@@ -16132,6 +16132,91 @@
      "command": "citygen2engine.py drive --src nonexistent-dir --out example/cg2-m0/negative-out"
     }
    ]
+  },
+  {
+   "id": "game-m0",
+   "label": "GAME M-GAME0",
+   "name": "最小可玩版：独立 game.exe 城市真闭环（Jolt 城市碰撞 + 撞击反馈）",
+   "tag": "game-m0",
+   "date": "2026-11-16",
+   "summary": "GAME-DEV-ORDER 第 7 步：新增独立 game/main.cpp（约 550 行），viewer 退回纯展示台回归基线零变动。消费 cg2-m0 city.scene.engine（150 box + 广州塔），中位数归一化坐标，物理层经 World::addCityBoxes（core 只加不改：ImpactState POD + 4 个 additive 方法）批量注册 Jolt 静态盒，chassis spawn 在无楼空位 (0,-35)；撞击判定要求对方在 chassisIds 白名单（消盒-盒伪事件）。玩家车以固定步长驱动，撞击反馈 = CameraTrauma 震屏 + AudioWorld 音效 + GAME_IMPACT 事件日志 + HUD。双 GPU 独显导出（NvOptimusEnablement/AmdPowerXpressRequestHighPerformance）修复新 exe 默认落 Intel 核显的启动崩溃。双后端基线实跑 rc=0 逐位一致：strength=4.7787 impulse=7167.9883 owner=113，基线 PNG 双后端 sha256 相同。",
+   "acceptance": [
+    "game selftest PASS（城市静态碰撞+撞击/GameClock/trauma 确定性）",
+    "phys-tools city-impact PASS（0 checks failed，双后端）：hits>0/owner 归属/clear 归零/双跑确定性",
+    "双后端 city drive rc=0 逐位一致：GAME_IMPACT strength=4.7787 impulse=7167.9883 owner=113；odometer_pos=(-0.00,0.86,-30.33)",
+    "基线 PNG 双后端 sha256 相同（c6c0fbbb…）；DX 复跑逐字节一致（run.bat seg5）",
+    "负向：scene 不存在 → exit 1 + loadCity failed 显式报错",
+    "冻结面：viewer/core 既有行为零改（core 仅 additive），viewer 回归基线零变动"
+   ],
+   "preview": "example/game-m0/game-street.png",
+   "exe": {
+    "dx12": "build/DX12/game.exe",
+    "vulkan": "build/VULKAN/game.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：无头全链验证",
+     "kind": "tool",
+     "note": "无窗口无渲染器：Jolt 城市盒+z=8 撞墙撞击/GAME_IMPACT/trauma 确定性。",
+     "exe": {
+      "dx12": "build/DX12/game.exe",
+      "vulkan": "build/VULKAN/game.exe"
+     },
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "game-m0 selftest: PASS",
+     "command": "game.exe --selftest"
+    },
+    {
+     "id": "street",
+     "name": "城市驾驶基线（撞击反馈 + 截图）",
+     "kind": "image",
+     "note": "240 逻辑步全油门直线，第 8 渲染帧撞 OSM 板楼：震屏+音效+事件日志。双后端基线 PNG 逐位一致。",
+     "baselines": {
+      "dx12": "example/game-m0/game-street.png",
+      "vulkan": "example/game-m0/game-street-VULKAN.png"
+     },
+     "args": [
+      "--city",
+      "{root}/example/cg2-m0",
+      "--screenshot",
+      "{out}",
+      "--screenshot-frame",
+      "8",
+      "--frames",
+      "16",
+      "--steps",
+      "240",
+      "--size",
+      "960x540",
+      "--seed",
+      "1"
+     ],
+     "expectExit": 0,
+     "expectLog": "GAME_IMPACT frame_hits=1 owner=113 strength=4.7787 impulse=7167.9883 pos=(87.16,4.50,3.28)",
+     "command": "game.exe --city example/cg2-m0 --screenshot <out.png> --screenshot-frame 8 --frames 16 --steps 240 --size 960x540 --seed 1"
+    },
+    {
+     "id": "negative",
+     "name": "负向：scene 目录不存在",
+     "kind": "tool",
+     "note": "scene 目录不存在在 resolve 期显式退出 2；loadCity 失败（json 损坏）才走 exit 1。",
+     "exe": {
+      "dx12": "build/DX12/game.exe",
+      "vulkan": "build/VULKAN/game.exe"
+     },
+     "args": [
+      "--city",
+      "nonexistent-dir"
+     ],
+     "expectExit": 2,
+     "expectLog": "game: scene not found",
+     "command": "game.exe --city nonexistent-dir"
+    }
+   ]
   }
  ]
 }

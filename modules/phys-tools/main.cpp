@@ -65,6 +65,7 @@ struct QueryRow;
 bool buildQueryRows(std::vector<QueryRow>* rows, std::string* err);
 void checkQueryRows(const std::vector<QueryRow>& rows, const char* tag);
 int  checkQueryLive(int frames);   // M-PQ1 live DebugScene structural check
+int  checkCityImpact();            // M-GAME0 city static box collision + impact anchors
 
 void verboseOk(const char* what) {
     if (g_verbose) std::printf("  ok %s\n", what);
@@ -2758,11 +2759,15 @@ int runSelftest() {
     // ---- M-PQ1: live DebugScene query (same structural check as CLI) ----
     if (checkQueryLive(90) != 0) ++g_failures;
 
+    // ---- M-GAME0: city static box collision + impact readback ----
+    if (checkCityImpact() != 0) ++g_failures;
+
     if (g_failures) {
         std::printf("phys-p0 selftest: FAIL (%d)\n", g_failures);
         return 1;
     }
     std::printf("phys-pq0 selftest: PASS (raycast/sweep/overlap, layer+body filters, 6 anchors)\n");
+    std::printf("phys-game0 city-impact: PASS (static box stops chassis, owner/strength/position, determinism)\n");
     std::printf("phys-d2 vehicle: PASS (VehicleConstraint fresh world, 4 wheel rays, stream, determinism)\n");
     std::printf("phys-d1 ecs: PASS (double buffer, PostPhysics consumer, TickGroup order, zero regression)\n");
     std::printf("phys-d0 contacts: PASS (ContactListener POD, added/persisted/removed, cache=0)\n");
@@ -3200,6 +3205,95 @@ int checkQueryLive(int frames) {
     const int failures = g_failures - before;
     std::printf("phys-pq1 query-live: %s (%d frames, %d checks failed)\n",
                 failures ? "FAIL" : "PASS", frames, failures);
+    return failures ? 1 : 0;
+}
+
+// M-GAME0: city static boxes really stop the chassis and emit impact readback.
+// Frozen scenario-2 defaults are unchanged: with no city boxes impactState() is
+// all-zero. A box placed ahead of the car at z=8 is hit under full throttle;
+// owner / position / strength are checked, then clearCityBoxes() restores zero.
+// Two independent scenes must produce bit-identical impact fields (determinism).
+struct CityImpactRun {
+    bool built = false;
+    int boxCount0 = -1, boxCount1 = -1;
+    nl::physics::ImpactState before, impact;
+    int steps = 0;
+};
+static CityImpactRun cityImpactRunOnce() {
+    CityImpactRun r;
+    nl::physics::DebugScene ds;
+    std::string err;
+    if (!ds.build(2, 0, &err)) return r;
+    r.built = true;
+    r.boxCount0 = ds.cityBoxCount();
+    r.before = ds.impactState();
+
+    const float pos[1][3] = {{0.0f, 5.0f, 8.0f}};
+    const float half[1][3] = {{6.0f, 5.0f, 0.5f}};
+    const std::uint64_t owners[1] = {777};
+    r.boxCount1 = ds.addCityBoxes(pos, half, owners, 1, nl::physics::layers::kDefault);
+
+    nl::physics::DriveInputState in;
+    in.forward = 1.0f;
+    const double dt = 1.0 / 60.0;
+    for (int i = 0; i < 150; ++i) {
+        ds.setDriveInput(in);
+        ds.step(dt);
+    }
+    r.impact = ds.impactState();
+    r.steps = 150;
+    return r;
+}
+
+int checkCityImpact() {
+    const int before = g_failures;
+    {
+        nl::physics::DebugScene ds;
+        std::string err;
+        expectTrue(ds.build(2, 0, &err), "M-GAME0 city: scenario 2 builds");
+        expectTrue(ds.cityBoxCount() == 0, "M-GAME0 city: no city boxes by default");
+        const nl::physics::ImpactState s = ds.impactState();
+        expectTrue(!s.hit && s.hits == 0 && s.owner == 0 && s.strength == 0.0f &&
+                   s.impulse == 0.0f && s.pos[0] == 0.0f && s.pos[1] == 0.0f && s.pos[2] == 0.0f,
+                   "M-GAME0 city: frozen impact POD is all-zero with no city boxes");
+        // Invalid layer is rejected without adding bodies (negative anchor).
+        const float pos[1][3] = {{0, 5, 8}};
+        const float half[1][3] = {{6, 5, 0.5f}};
+        const std::uint64_t owners[1] = {777};
+        expectTrue(ds.addCityBoxes(pos, half, owners, 1, nl::physics::kLayerCount) == 0,
+                   "M-GAME0 city: reject out-of-range layer");
+        expectTrue(ds.addCityBoxes(pos, half, owners, 1, nl::physics::layers::kDefault) == 1,
+                   "M-GAME0 city: one static box added");
+        expectTrue(ds.cityBoxCount() == 1, "M-GAME0 city: cityBoxCount reflects add");
+        ds.clearCityBoxes();
+        expectTrue(ds.cityBoxCount() == 0, "M-GAME0 city: clearCityBoxes removes all boxes");
+    }
+    const CityImpactRun a = cityImpactRunOnce();
+    const CityImpactRun b = cityImpactRunOnce();
+    expectTrue(a.built && b.built, "M-GAME0 city: both impact runs built");
+    expectTrue(a.boxCount0 == 0 && b.boxCount0 == 0 && a.boxCount1 == 1 && b.boxCount1 == 1,
+               "M-GAME0 city: box add count stable across runs");
+    expectTrue(!a.before.hit && !b.before.hit, "M-GAME0 city: pre-drive impact is zero in both runs");
+    expectTrue(a.impact.hit && a.impact.hits > 0,
+               "M-GAME0 city: city box produces real contact impact");
+    expectTrue(a.impact.owner == 777, "M-GAME0 city: impact owner = building entity id");
+    expectTrue(a.impact.strength > 0.0f && a.impact.impulse > 0.0f,
+               "M-GAME0 city: impact strength and impulse proxy are positive");
+    expectTrue(a.impact.pos[2] > 7.0f && a.impact.pos[2] < 9.0f,
+               "M-GAME0 city: impact position at the building (z ~ 8)");
+    // Determinism: every impact field bit-identical across two fresh scenes.
+    expectTrue(a.impact.hits == b.impact.hits && a.impact.owner == b.impact.owner &&
+               a.impact.strength == b.impact.strength && a.impact.impulse == b.impact.impulse &&
+               a.impact.pos[0] == b.impact.pos[0] && a.impact.pos[1] == b.impact.pos[1] &&
+               a.impact.pos[2] == b.impact.pos[2] && a.impact.hit == b.impact.hit,
+               "M-GAME0 city: impact fields bit-identical across two runs");
+    if (g_verbose) {
+        std::printf("[city] hits=%u owner=%llu strength=%.4f impulse=%.4f pos=(%.2f,%.2f,%.2f) steps=%d\n",
+                    a.impact.hits, (unsigned long long)a.impact.owner, a.impact.strength,
+                    a.impact.impulse, a.impact.pos[0], a.impact.pos[1], a.impact.pos[2], a.steps);
+    }
+    const int failures = g_failures - before;
+    std::printf("phys-game0 city-impact: %s (%d checks failed)\n", failures ? "FAIL" : "PASS", failures);
     return failures ? 1 : 0;
 }
 

@@ -291,6 +291,23 @@ struct DriveViewState {
     bool  valid           = false;
 };
 
+// ---- M-GAME0: city-building impact readback (Jolt-free POD, additive) ----
+// Produced by the optional city static-box contact listener (scenario 2 only).
+// Distinct from DriveViewState so the frozen drive POD layout is untouched.
+// 'strength' = chassis horizontal speed at the moment of contact (m/s);
+// 'impulse' is a deterministic proxy (mass * closing speed), NOT a Jolt solver
+// impulse -- sufficient for shake/audio amplitude and for numeric anchors.
+// Fields accumulate across the frame until resetImpact(); 'hit' stays true if
+// any city-building contact was added since the last reset.
+struct ImpactState {
+    std::uint32_t hits    = 0;      // city-building contacts added since reset
+    std::uint64_t owner   = 0;      // engine-side entity id of last hit building
+    float pos[3]          = {0.0f, 0.0f, 0.0f}; // last contact world position (m)
+    float strength        = 0.0f;  // last contact chassis horizontal speed (m/s)
+    float impulse         = 0.0f;  // deterministic proxy: strength * chassis mass
+    bool  hit             = false; // any city-building contact since last reset
+};
+
 struct DebugLines {
     const float* data = nullptr;          // px,py,pz,r,g,b 交替，长度 = vertexCount*6
     std::uint32_t vertexCount = 0;        // LINE_LIST：每 2 顶点为一段线
@@ -353,6 +370,25 @@ public:
     // succeeds. The attached QueryScene must die BEFORE this DebugScene
     // (caller's duty).
     QueryHost* queryHost();
+
+    // ---- M-GAME0: city static collision + impact readback (additive) ----
+    // Scenario 2 only. Batch-add static boxes from city-building transforms so
+    // the player chassis physically collides with them (real contact events,
+    // NOT soft probes). layer/owner are the collision layer and engine entity
+    // id respectively; layer kDefault collides with the kDefault chassis.
+    // Boxes persist until clearCityBoxes() or the scene is rebuilt. Returns the
+    // number of bodies actually added; a failure sets lastError(). Bodies use
+    // JPH::EMotionType::Static + DontActivate, so this is cheap for 150 boxes.
+    // NOTE: call AFTER build(2, ..) succeeded. OptimizeBroadPhase() is re-run
+    // internally so newly added boxes are visible to the broadphase same frame.
+    int addCityBoxes(const float positions[][3], const float halfExtents[][3],
+                     const std::uint64_t* owners, int count, std::uint32_t layer);
+    void clearCityBoxes();
+    int  cityBoxCount() const;
+    // Latest city-building impact since the last resetImpact(). valid only for
+    // scenario 2 with city boxes present.
+    ImpactState impactState() const;
+    void resetImpact();
 
 private:
     struct Impl;
