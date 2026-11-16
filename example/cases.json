@@ -15870,6 +15870,101 @@
      }
     }
    ]
+  },
+  {
+   "id": "cg0-m0",
+   "label": "CG0 M-CG0",
+   "name": "citygen：OSM 真实地图输入源（Overpass out:json → 珠江新城路网/建筑 → roadnet/city.scene/俯视 PNG）",
+   "tag": "cg0-m0",
+   "date": "2026-11-16",
+   "summary": "M-CG0：modules/citygen 自研库——Overpass [out:json] 解析（vendored nlohmann 3.10.4 单头，只进 .cpp）+ bbox 过滤 + WGS-84→局部米锚（dx=Δlng·cos(23.1°)·111320，BusViewer 同公式）；highway→roadnet.json（路口合并/类别→速度车道缺省表/maxspeed+lanes 标签覆盖/M-T4 signal 规则/确定性序列化，新增 osm_name/cls 字段只加不减）；building→块（height 标签>levels×3>9m）→city.scene（实体级 label 字段=OSM name，A 档拍板，80/150 栋带真名含西塔 440.2m）+ 俯视 PNG（确定性栅格：建筑高度灰度 0x58..0xe8/路网类别分色，stb vendored；TopViewStats 内容锚 bldPx/roadPx>0 拦坐标系错位假绿）。输入素材复用 GuangzhouBusViewer 64 分片（tile-3-2 裁 fixture 300 ways）+ mail.ru 镜像拉建筑 436 栋（GET+UA+代理+重试）。selftest 8 组/单测 6 用例全绿；真实产物 375 节点/417 边/150 栋/2048×1875 PNG。M-CG1 挂账：地标混合架构（canton max 场景只抠地标单体 glb + landmark_whitelist.json 抑制，广州塔零冲突先行）。",
+   "acceptance": [
+    "selftest 8 组 PASS（解析/bbox/局部坐标锚/过滤/roadnet 拓扑/oneway+maxspeed+lanes+序列化/建筑/PNG 内容锚 bldPx=610）",
+    "ctest 6/6 双后端绿（cg0-selftest/sample/convert/negative/buildings/export）",
+    "真实珠江新城 export：375 nodes/417 edges/150 buildings，PNG 2048×1875 bldPx=263136 roadPx=286191（肉眼验收：街区围合/高度亮度分层/立交分明）",
+    "ODbL 署名随产物落盘；city.scene JSON 逐级解析验证（label 实体级 80/150）"
+   ],
+   "preview": "example/cg0-m0/top.png",
+   "exe": {
+    "dx12": "build/DX12/citygen.exe",
+    "vulkan": "build/VULKAN/citygen.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "citygen 纯 CPU 离线工具，两构建树产物等价，运行时零联网。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "citygen - nl-engine city generation (OSM input, M-CG0)",
+     "command": "citygen"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：8 组断言（解析/bbox/坐标锚/roadnet 契约/建筑/PNG 内容锚）",
+     "kind": "tool",
+     "note": "S8 是内容级锚（bldPx=610>0）——专拦建筑坐标系错位全部裁出画布的假绿（M-CG0.2 当场抓杀过）。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS (8 groups, mini overpass sample)",
+     "command": "citygen selftest"
+    },
+    {
+     "id": "convert",
+     "name": "convert：珠江新城 fixture → roadnet.json（375 节点/417 边）",
+     "kind": "tool",
+     "note": "输入 = tile-3-2 裁剪 fixture（300 ways，BusViewer 2026-10-29 分片）；bbox 23.108,113.316,23.130,113.342。",
+     "args": [
+      "convert",
+      "--input",
+      "modules/citygen/test/zjx-sample.json",
+      "--bbox",
+      "23.108,113.316,23.130,113.342",
+      "--out",
+      "{root}/example/cg0-m0/roadnet.json"
+     ],
+     "expectExit": 0,
+     "expectLog": "nodes=375 edges=417",
+     "command": "citygen convert --input modules/citygen/test/zjx-sample.json --bbox 23.108,113.316,23.130,113.342 --out example/cg0-m0/roadnet.json"
+    },
+    {
+     "id": "export",
+     "name": "export：路网+建筑 → 四件套（roadnet/city.scene/box.obj/top.png+ODbL 署名）",
+     "kind": "tool",
+     "note": "150 栋（含西塔 440.2m，80 栋 label 真名）；png 2048×1875 bldPx=263136 是确定性锚。",
+     "args": [
+      "export",
+      "--input",
+      "modules/citygen/test/zjx-sample.json",
+      "--buildings",
+      "modules/citygen/test/zjx-buildings-sample.json",
+      "--bbox",
+      "23.108,113.316,23.130,113.342",
+      "--out",
+      "{root}/example/cg0-m0"
+     ],
+     "expectExit": 0,
+     "expectLog": "buildings=150",
+     "command": "citygen export --input modules/citygen/test/zjx-sample.json --buildings modules/citygen/test/zjx-buildings-sample.json --bbox 23.108,113.316,23.130,113.342 --out example/cg0-m0"
+    },
+    {
+     "id": "negative",
+     "name": "负向：输入文件不存在显式退出 2",
+     "kind": "tool",
+     "note": "非法输入不静默（M-CG0.0 契约）。",
+     "args": [
+      "stats",
+      "--input",
+      "nonexistent.json"
+     ],
+     "expectExit": 2,
+     "expectLog": "citygen: cannot read 'nonexistent.json'",
+     "command": "citygen stats --input nonexistent.json"
+    }
+   ]
   }
  ]
 }
