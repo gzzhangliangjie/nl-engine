@@ -35,7 +35,7 @@
 | **5** | **游戏壳收拢**：独立 game target，GameClock 逻辑帧串起输入→载具→相机→World | 「能开一圈」截图 + 暂停语义回归 | 1+3+4 | 待开工（Q2 定 target 形态） |
 | **6** | 程序化城市生成工具（blocks/楼房/道路 → `.nmesh` + 路网数据） | 离线工具卡：生成 → 渲染城市俯视/街景证据图 | Q-B 已拍板=程序化生成 | **M-W0 已收官**（2026-11-13，tag `w0-m0`~`w0-m3`：city-tools 产俯视 PNG + roadnet.json + 36 OBJ 中间件 + city.scene，72 断言 + 6 ctest + 4 展示台卡）；**M-W1 已立项**（2026-11-13，`docs/worldgen/W1-PLAN.md`：城市资产进引擎——OBJ→glb→nmesh 转换消费步 + city.scene.engine，Q-W1A/B/C/D 已拍板；落码闸 = asset-ingest OBJ→glb 链 merge master） |
 | **7** | 小规模程序化城市 + 载具驾驶闭环 | **第一个 tag 门槛：最小可玩版**——能在生成的城市里开一圈、撞了有事件反馈 | 5+6 | 待开工 |
-| **8** | 交通系统 M-T0：lane graph 数据结构 + 路网寻路 + 直线跟车 | 纯逻辑 selftest 数值锚（确定性逐位）+ debug 可视化画车道线 | 6 的路网数据 | 待开工（Q-A 拍板自研立项） |
+| **8** | 交通系统 M-T0：lane graph 数据结构 + 路网寻路 + 直线跟车 | 纯逻辑 selftest 数值锚（确定性逐位）+ debug 可视化画车道线 | 6 的路网数据 | **✅ 已收官**（2026-11-16 勘误：交通轨 M-T0~T4 整轨完成，tags `traffic-m0`~`traffic-m4`，2026-11-14 merge master `1e8f4e1`：lane graph + A* + C1 跟车 / 信号相位 + 占用锁 / 组共享锁 + 转弯独占 / CityCar 接 viewer `--traffic-city` 42 车永续车流 / 红绿灯可视化 + citygen signal 填充；本行原「待开工」为过期口径） |
 | **9** | 调度器迭代：红绿灯相位、路口让行、避撞 | 同上 + 场景截图（车流不穿模、路口不堵死） | 8 | 待开工 |
 | **10** | 流式分页（城市规模拉到超显存） | V4 口径：分页加载/卸载、帧时间平稳 | Q-C 拍板 | 待开工 |
 | **11** | 打磨波：游戏 UI（ImGui 先凑 / RmlUi 可选立项）、引擎音效接玩法、粒子轮胎烟（M-PT0）、行人 NPC（Recast 接）、**天气渲染穿插项（track `weather`，参数层 M-WEA0~WEA3；见 `WEATHER-PLAN.md`）**、存档 | 各自独立小步 | 无硬依赖；天气渲染穿插项随时可插，与主线零耦合 | 部分在轨（M-PT0） |
