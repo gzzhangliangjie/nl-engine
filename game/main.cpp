@@ -103,6 +103,7 @@ struct Options {
     std::string weatherPreset = "clear";
     bool skyBg = false;                // analytic sky background pass
     bool ground = false;               // M-CITY-LIT: ground slab (see loadCity)
+    bool gi = false;                   // M-CITY-LIT: probe GI chain (--gi)
     float yaw = 28.0f, pitch = -10.0f, dist = 30.0f;  // free-cam fallback
     // M-GAME1: AI traffic (kinematic lane-graph sim, NOT Jolt bodies — cars
     // pass through the player chassis by design; see GAME1-PLAN.md §0).
@@ -199,6 +200,8 @@ int parseArgs(int argc, char** argv, Options* o) {
                 (int)nl::core::WeatherKind::kCount) return 2;
         } else if (a == "--sky-bg") {
             o->skyBg = true;
+        } else if (a == "--gi") {
+            o->gi = true;   // M-CITY-LIT: probe GI chain (place->trace->gather->compose)
         } else if (a == "--yaw") {
             std::string v; if (!need("--yaw", &v)) return 2; o->yaw = std::atof(v.c_str());
         } else if (a == "--pitch") {
@@ -1010,6 +1013,7 @@ int runGame(const Options& o) {
             fp.weatherFogHeight  = static_cast<float>(ws.fogHeight);
             fp.weatherWetness    = static_cast<float>(ws.groundWetness);
             fp.sceneSkyBg = resolved.skyBg;
+            fp.cityGi = resolved.gi;   // M-CITY-LIT: --gi probe GI chain
         }
         nl::renderer::HudFrame hud{};
         hud.backend = "game";

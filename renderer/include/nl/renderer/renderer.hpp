@@ -205,6 +205,9 @@ struct FrameParams {
     bool  sceneSkyBg        = false;  // M-NL2-C：--sky-bg 进 scene 链（sceneMode_
                                       // clear 后插全屏解析天穹 pass，sky_bg.slang；
                                       // 默认关 = 既有基线一像素不动）
+    bool  cityGi            = false;  // M-CITY-LIT：--gi 城市链探针 GI（sceneMode_
+                                      // 分支 place→trace→gather→compose 四连，
+                                      // 复用 probe 模式全套资源；缺省关 = 基线零动）
 
     // ---- S11 M11.0：--mode cache-viz 世界缓存占用伪彩（probe 链之上叠加
     //  fill/decay/viz 三个 compute；其它模式不读，缺省 false 零扰动）。

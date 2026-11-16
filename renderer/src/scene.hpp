@@ -1248,6 +1248,49 @@ private:
     float                        clusterBlasBuildMs_ = 0.0f;     // resolve 后恒定
     int                          clusterBlasTriangleCount_ = 0;  // 全部簇三角合计
     std::uint64_t                clusterBlasInputBytes_ = 0;     // slab 实际字节（确定值）
+
+    // ---- M-CITY-LIT：ECS 城市场景自有 BLAS/TLAS（additive；探针 GI 地基）----
+    // 每 SceneMeshBatch 一个 BLAS（build-input = batch 几何 CPU 副本，SceneVertex
+    // 32B 交错 stride，position 在 offset 0 → RGB32_FLOAT 直读）。TLAS 每实例一
+    // 个（objects 全集，静态城市一次 build 常驻；InstanceDesc transform = 列主
+    // 序 world 转置成行主序 3x4）。与 fallback blas_/clusterBlas_ 互不干扰。
+    struct CityBlasInput {
+        const SceneVertex* vertices;
+        std::uint32_t      vertexCount;
+        const std::uint32_t* indices;
+        std::uint32_t      indexCount;
+    };
+    bool                         cityBlasReady_ = false;
+    std::vector<nvrhi::rt::AccelStructHandle> cityBlas_;         // [batch] → BLAS
+    std::vector<nvrhi::BufferHandle> cityBlasVB_, cityBlasIB_;  // build-input
+    GpuTimer                     cityBlasTimer_;
+    bool                         cityTlasReady_ = false;
+    nvrhi::rt::AccelStructHandle cityTlas_;
+    GpuTimer                     cityTlasTimer_;
+    std::uint32_t                cityTlasInstanceCount_ = 0;
+    bool initCityBlas(nvrhi::IDevice* device,
+                      const std::vector<CityBlasInput>& inputs,
+                      std::string& outError);
+    bool initCityTlas(nvrhi::IDevice* device, const nl::renderer::SceneObjectDesc* objects,
+                      std::uint32_t objectCount, std::string& outError);
+    // M-CITY-LIT：--gi 城市链探针 GI。复用 probe 模式全套资源成员（probeDepth_/
+    // probeAtlas_/probePrevDelta_/irradAtlas_/gatherLinear_/probeCB_/traceCB_/
+    // gatherCB_/placePSO_/tracePSO_/gatherPSO_/gatherComposePSO_/placeLayout_/
+    // traceLayout_/gatherLayout_/placeSet_/traceSet_/gatherSet_/wcChecksums_/
+    // wcRadiance_）——initProbe 与城市 initScene 每进程互斥，城市模式这些成员
+    // 为 null，首帧在 ensureCityGi 惰性创建。probeDepth_ 口径差异：城市链无
+    // velocity prepass，probeDepth_ = t0Depth_（backend 共享深度，DepthWrite
+    // 永驻态不能切 SRV，ensureProbeTargets 同款结论）的逐帧拷贝目标（非 RT）。
+    bool                         cityGiActive_ = false;
+    bool                         cityGiFailed_ = false;   // ensure 失败后不再试（一次性日志）
+    bool                         cityGiFirstFrame_ = true;
+    std::uint32_t                cityGiParity_ = 0;
+    std::uint32_t                cityGiW_ = 0, cityGiH_ = 0;   // 视口守卫（变了重建）
+    static constexpr std::uint32_t kCityGiBaseRes = 64;        // 0 级 cascade（城市尺度固定）
+    bool ensureCityGi(nvrhi::IDevice* device, std::uint32_t vpW, std::uint32_t vpH,
+                      std::string& outError);
+    bool runCityGi(nvrhi::ICommandList* cmd, const FrameParams& params,
+                   const nvrhi::Viewport& viewport, std::string& outError);
     std::uint64_t                clusterBlasEstBytes_ = 0;       // AS 上界估算（NVRHI 不暴露真实尺寸）
 
     // ---- M13.1（S13，拍板 A）：可见簇列表回读环形 + TLAS 直挂每可见簇一实例 ----

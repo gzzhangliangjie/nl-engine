@@ -2562,6 +2562,157 @@ void Scene::buildClusterTlasFrame(nvrhi::ICommandList* cmd, const FrameParams& f
     }
 }
 
+// ---- M-CITY-LIT：ECS 城市场景自有 BLAS/TLAS（探针 GI 地基，additive）----
+// 每 batch 一个 BLAS；build-input = batch 几何 CPU 副本（SceneVertex 32B 交错，
+// position offset 0 → RGB32_FLOAT 直读）。上传+build 同命令列表（M8.0/M8.1
+// 配方：跨列表 build-input 状态转换会触发 DX12 CORRUPTION 0x87d，勿改）。
+// TLAS = 每实例一个（objects 全集），静态城市一次 build 常驻；InstanceDesc
+// transform = 列主序 world 转置成行主序 3x4（DXR object-to-world 约定）。
+bool Scene::initCityBlas(nvrhi::IDevice* device,
+                         const std::vector<CityBlasInput>& inputs,
+                         std::string& outError) {
+    if (cityBlasReady_) return true;
+    if (inputs.empty()) return true;   // 空场景：跳过不拦路
+    cityBlas_.resize(inputs.size());
+    cityBlasVB_.resize(inputs.size());
+    cityBlasIB_.resize(inputs.size());
+    cityBlasTimer_.setLabel("cityblas");
+    struct BuildPair { nvrhi::rt::AccelStructHandle as; nvrhi::BufferHandle vb, ib;
+                       const CityBlasInput* in; nvrhi::rt::GeometryDesc geom;
+                       std::size_t batch; };
+    std::vector<BuildPair> builds;
+    for (std::size_t b = 0; b < inputs.size(); ++b) {
+        const CityBlasInput& in = inputs[b];
+        if (!in.vertices || in.vertexCount == 0 || !in.indices || in.indexCount < 3)
+            continue;
+        nvrhi::BufferDesc vbDesc;
+        vbDesc.byteSize = std::uint64_t(in.vertexCount) * sizeof(SceneVertex);
+        vbDesc.setIsAccelStructBuildInput(true);
+        vbDesc.debugName = ("CityBlasVB" + std::to_string(b)).c_str();
+        nvrhi::BufferDesc ibDesc;
+        ibDesc.byteSize = std::uint64_t(in.indexCount) * sizeof(std::uint32_t);
+        ibDesc.setIsAccelStructBuildInput(true);
+        ibDesc.debugName = ("CityBlasIB" + std::to_string(b)).c_str();
+        nvrhi::BufferHandle vb = device->createBuffer(vbDesc);
+        nvrhi::BufferHandle ib = device->createBuffer(ibDesc);
+        if (!vb || !ib) { outError = "initCityBlas: createBuffer failed"; return false; }
+        nvrhi::rt::GeometryDesc geom;
+        geom.geometryData.triangles
+            .setVertexBuffer(vb)
+            .setVertexFormat(nvrhi::Format::RGB32_FLOAT)
+            .setVertexStride(sizeof(SceneVertex))
+            .setVertexCount(in.vertexCount)
+            .setIndexBuffer(ib)
+            .setIndexFormat(nvrhi::Format::R32_UINT)
+            .setIndexCount(in.indexCount);
+        nvrhi::rt::AccelStructDesc asDesc;
+        asDesc.addBottomLevelGeometry(geom);
+        asDesc.setBuildFlags(nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+        asDesc.setDebugName(("CityBlas" + std::to_string(b)).c_str());
+        nvrhi::rt::AccelStructHandle as = device->createAccelStruct(asDesc);
+        if (!as) {
+            // 无 RT 设备：GI 链整体 skip（渲染照常），与 initBlas 同口径不拦路。
+            nl::core::log::warnCh("scene",
+                "cityblas: createAccelStruct failed — ray tracing unsupported? GI disabled");
+            return true;
+        }
+        builds.push_back({as, vb, ib, &in, geom, b});
+    }
+    if (builds.empty()) return true;
+    nvrhi::CommandListHandle cmd = device->createCommandList();
+    cmd->open();
+    if (cityBlasTimer_.ensure(device)) cityBlasTimer_.begin(cmd);
+    for (BuildPair& p : builds) {
+        cmd->beginTrackingBufferState(p.vb, nvrhi::ResourceStates::CopyDest);
+        cmd->writeBuffer(p.vb, p.in->vertices,
+                         std::size_t(p.in->vertexCount) * sizeof(SceneVertex));
+        cmd->setBufferState(p.vb, nvrhi::ResourceStates::AccelStructBuildInput);
+        cmd->beginTrackingBufferState(p.ib, nvrhi::ResourceStates::CopyDest);
+        cmd->writeBuffer(p.ib, p.in->indices,
+                         std::size_t(p.in->indexCount) * sizeof(std::uint32_t));
+        cmd->setBufferState(p.ib, nvrhi::ResourceStates::AccelStructBuildInput);
+        cmd->buildBottomLevelAccelStruct(p.as, &p.geom, 1,
+                                         nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+        cmd->setPermanentBufferState(p.vb, nvrhi::ResourceStates::AccelStructBuildInput);
+        cmd->setPermanentBufferState(p.ib, nvrhi::ResourceStates::AccelStructBuildInput);
+    }
+    cityBlasTimer_.end(cmd);
+    cmd->close();
+    device->executeCommandList(cmd);
+    // 0x87d 第二坑（M8.1 配方）：build 列表须落地完成才析构（scratch chunk 随
+    // 列表 final-release）——轮询 fence 等待本次提交完成。
+    device->waitForIdle();
+    for (const BuildPair& p : builds) {
+        cityBlas_[p.batch]  = p.as;
+        cityBlasVB_[p.batch] = p.vb;
+        cityBlasIB_[p.batch] = p.ib;
+    }
+    cityBlasReady_ = true;
+    nl::core::log::infoCh("scene", "cityblas: ", builds.size(),
+                        " batch BLAS built (ray-traceable city)");
+    return true;
+}
+
+bool Scene::initCityTlas(nvrhi::IDevice* device, const nl::renderer::SceneObjectDesc* objects,
+                         std::uint32_t objectCount, std::string& outError) {
+    (void)outError;
+    if (cityTlasReady_) return true;
+    if (!cityBlasReady_ || !objects || objectCount == 0) return true;
+    nvrhi::rt::AccelStructDesc tlasDesc;
+    tlasDesc.setTopLevelMaxInstances(objectCount);
+    tlasDesc.setBuildFlags(nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+    tlasDesc.setDebugName("CityTlas");
+    cityTlas_ = device->createAccelStruct(tlasDesc);
+    if (!cityTlas_) {
+        nl::core::log::warnCh("scene", "citytlas: createAccelStruct failed — GI disabled");
+        return true;
+    }
+    // 每 object 一个实例：objToBatch 映射来自 sceneBatchObjects_（initScene 已
+    // 填好）；行主序 3x4 = 列主序 world 转置（DXR object-to-world 约定）。
+    // 静态城市一次 build 常驻（无 AllowUpdate 位；M8.1 per-frame rebuild 是
+    // 动态单实例场景口径，城市不需要）。
+    std::vector<std::uint32_t> objToBatch(objectCount, 0xFFFFFFFFu);
+    for (std::size_t b = 0; b < sceneBatches_.size() && b < cityBlas_.size(); ++b) {
+        if (!cityBlas_[b]) continue;
+        for (std::uint32_t i : sceneBatchObjects_[b])
+            if (i < objectCount) objToBatch[i] = static_cast<std::uint32_t>(b);
+    }
+    nvrhi::rt::InstanceDesc inst;
+    inst.setInstanceMask(0xFF);
+    inst.setInstanceContributionToHitGroupIndex(0);
+    std::vector<nvrhi::rt::InstanceDesc> insts;
+    insts.reserve(objectCount);
+    for (std::uint32_t i = 0; i < objectCount; ++i) {
+        const std::uint32_t b = objToBatch[i];
+        if (b == 0xFFFFFFFFu || !cityBlas_[b]) continue;
+        const float* m = objects[i].world;   // 列主序 4x4
+        float tf[12];
+        for (int r = 0; r < 3; ++r)
+            for (int c = 0; c < 4; ++c)
+                tf[r * 4 + c] = m[c * 4 + r];
+        inst.setTransform(tf);
+        inst.setInstanceID(i);
+        inst.setBLAS(cityBlas_[b]);
+        insts.push_back(inst);
+    }
+    if (insts.empty()) return true;
+    nvrhi::CommandListHandle cmd = device->createCommandList();
+    cmd->open();
+    if (cityTlasTimer_.ensure(device)) cityTlasTimer_.begin(cmd);
+    cmd->buildTopLevelAccelStruct(cityTlas_, insts.data(),
+                                  static_cast<std::uint32_t>(insts.size()),
+                                  nvrhi::rt::AccelStructBuildFlags::PreferFastTrace);
+    cityTlasTimer_.end(cmd);
+    cmd->close();
+    device->executeCommandList(cmd);
+    device->waitForIdle();   // M8.1 配方：build 列表落地后析构
+    cityTlasReady_ = true;
+    cityTlasInstanceCount_ = static_cast<std::uint32_t>(insts.size());
+    nl::core::log::infoCh("scene", "citytlas: built once | instances=",
+                        cityTlasInstanceCount_);
+    return true;
+}
+
 // 探针管线懒建：tlas_probe.cs.{spv,dxil}（CMake _ENTRIES_TLAS_PROBE）+ 单一
 // BindingSet（t0 = TLAS + u0 = 4B hit t）。失败置 probeFailed_ 只报一次（不拦路）。
 bool Scene::ensureTlasProbe(nvrhi::ICommandList* cmd) {
@@ -5807,6 +5958,402 @@ void Scene::drawProbeFrame(nvrhi::ICommandList* cmd, const nvrhi::Viewport& view
             ++irradReadbackSubmitted_;
         }
     }
+}
+
+// ============================================================================
+// M-CITY-LIT：--gi 城市链探针 GI（成员注释见 scene.hpp 城市段）。
+// ensureCityGi：首帧惰性建资源（PSO/layout/CB/纹理/绑定集 + world cache 兜底
+// 表）；视口变了整组帧尺寸资源释放重建（ensureProbeTargets 同款守卫）。
+// ============================================================================
+bool Scene::ensureCityGi(nvrhi::IDevice* device, std::uint32_t vpW, std::uint32_t vpH,
+                         std::string& outError) {
+    if (cityGiActive_ && cityGiW_ == vpW && cityGiH_ == vpH) return true;
+    if (!device) { outError = "city gi: device not captured"; return false; }
+
+    // 视口变了：帧尺寸资源全部释放重建（CB/PSO/layout 不依赖视口，保留）。
+    if (cityGiActive_) {
+        probeDepth_ = nullptr;
+        for (auto& row : probeAtlas_) for (auto& t : row) t = nullptr;
+        probePrevDelta_ = nullptr;
+        for (auto& t : irradAtlas_) t = nullptr;
+        gatherLinear_ = nullptr;
+        for (auto& s : placeSet_) s = nullptr;
+        for (auto& s : traceSet_) s = nullptr;
+        for (auto& s : gatherSet_) s = nullptr;
+        cityGiActive_ = false;
+        cityGiFirstFrame_ = true;
+    }
+
+    // ---- shader 加载（probe 模式同四张 CS；城市模式 initProbe 未跑 → 此处加载）。
+    auto loadCs = [&](const char* artifact, nvrhi::ShaderHandle& out) -> bool {
+        if (out) return true;
+        const std::string path = nl::core::paths::shaderDir() + "/" + artifact +
+                                 "." + shaderSuffix_;
+        std::vector<std::uint8_t> blob;
+        if (!readFileBytes(path.c_str(), blob)) {
+            outError = std::string("city gi: failed to load ") + artifact;
+            return false;
+        }
+        nvrhi::ShaderDesc desc;
+        desc.setShaderType(nvrhi::ShaderType::Compute).setEntryName("main");
+        out = device->createShader(desc, blob.data(), blob.size());
+        if (!out) outError = std::string("city gi: createShader failed for ") + artifact;
+        return out != nullptr;
+    };
+    if (!loadCs("probe.csplace", csPlace_) || !loadCs("probe_trace.cstrace", csTrace_) ||
+        !loadCs("probe_gather.csgather", csGather_) ||
+        !loadCs("probe_gather.csgathercompose", csGatherCompose_))
+        return false;
+
+    // ---- 布局（initProbe 同款三份；PSO 反射铁律：槽位与 shader 一致）。
+    if (!placeLayout_) {
+        nvrhi::BindingLayoutDesc pDesc;
+        pDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(4));
+        placeLayout_ = device->createBindingLayout(pDesc);
+        if (!placeLayout_) { outError = "city gi: place layout failed"; return false; }
+    }
+    if (!traceLayout_) {
+        nvrhi::BindingLayoutDesc tDesc;
+        tDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(1))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(2))
+            .addItem(nvrhi::BindingLayoutItem::Texture_SRV(3))
+            .addItem(nvrhi::BindingLayoutItem::RayTracingAccelStruct(4))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(5))
+            .addItem(nvrhi::BindingLayoutItem::StructuredBuffer_SRV(6))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(0))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(1))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(2))
+            .addItem(nvrhi::BindingLayoutItem::Texture_UAV(3));
+        traceLayout_ = device->createBindingLayout(tDesc);
+        if (!traceLayout_) { outError = "city gi: trace layout failed"; return false; }
+    }
+    if (!gatherLayout_) {
+        nvrhi::BindingLayoutDesc gDesc;
+        gDesc.setVisibility(nvrhi::ShaderType::All)
+            .addItem(nvrhi::BindingLayoutItem::VolatileConstantBuffer(0));
+        for (std::uint32_t s = 0; s < 10; ++s)
+            gDesc.addItem(nvrhi::BindingLayoutItem::Texture_SRV(s));
+        gDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(0));
+        gDesc.addItem(nvrhi::BindingLayoutItem::Texture_UAV(1));
+        gatherLayout_ = device->createBindingLayout(gDesc);
+        if (!gatherLayout_) { outError = "city gi: gather layout failed"; return false; }
+    }
+
+    // ---- PSO（initProbe 同款四条 compute pipeline）。
+    auto makeCsPso = [&](nvrhi::ShaderHandle shader, nvrhi::BindingLayoutHandle layout,
+                         nvrhi::ComputePipelineHandle& out, const char* name) -> bool {
+        if (out) return true;
+        nvrhi::ComputePipelineDesc cpDesc;
+        cpDesc.setComputeShader(shader).addBindingLayout(layout);
+        out = device->createComputePipeline(cpDesc);
+        if (!out) outError = std::string("city gi: PSO failed for ") + name;
+        return out != nullptr;
+    };
+    if (!makeCsPso(csPlace_, placeLayout_, placePSO_, "place") ||
+        !makeCsPso(csTrace_, traceLayout_, tracePSO_, "trace") ||
+        !makeCsPso(csGather_, gatherLayout_, gatherPSO_, "gather") ||
+        !makeCsPso(csGatherCompose_, gatherLayout_, gatherComposePSO_, "gather-compose"))
+        return false;
+
+    // ---- volatile CB（尺寸照抄 initProbe：192 / 128 / 192；setMaxVersions(16)
+    // 每帧全量覆写铁律）。
+    auto makeCb = [&](nvrhi::BufferHandle& out, std::uint32_t bytes,
+                      const char* name) -> bool {
+        if (out) return true;
+        nvrhi::BufferDesc d;
+        d.byteSize = bytes;
+        d.isConstantBuffer = true;
+        d.isVolatile = true;
+        d.maxVersions = 16;
+        d.debugName = name;
+        out = device->createBuffer(d);
+        if (!out) outError = std::string("city gi: CB failed for ") + name;
+        return out != nullptr;
+    };
+    if (!makeCb(probeCB_, 192, "CityGiPlaceConstants") ||
+        !makeCb(traceCB_, 128, "CityGiTraceConstants") ||
+        !makeCb(gatherCB_, 192, "CityGiGatherConstants"))
+        return false;
+
+    // ---- 帧尺寸纹理（创建态 SRV 与帧首 beginTracking 声明对齐，probe 同款铁律）。
+    {
+        nvrhi::TextureDesc d;
+        d.width = vpW; d.height = vpH;
+        d.format = nvrhi::Format::D32;
+        d.isRenderTarget = true;   // 深度格式必须带 RT bind flag（E_INVALIDARG 0x80070057 实锤；
+                                   // 城市链不做附件写入，仅 copy 目标 + SRV）
+        d.initialState = nvrhi::ResourceStates::ShaderResource;
+        d.keepInitialState = true;
+        d.setClearValue(nvrhi::Color(1.0f));
+        d.debugName = "CityGiProbeDepth";
+        probeDepth_ = device->createTexture(d);
+        if (!probeDepth_) { outError = "city gi: probe depth failed"; return false; }
+    }
+    for (std::uint32_t parity = 0; parity < 2; ++parity) {
+        for (std::uint32_t level = 0; level < 4; ++level) {
+            const std::uint32_t res_l = kCityGiBaseRes >> level;
+            nvrhi::TextureDesc a;
+            a.width = res_l; a.height = res_l;
+            a.format = nvrhi::Format::RGBA32_FLOAT;
+            a.isUAV = true;
+            a.initialState = nvrhi::ResourceStates::ShaderResource;
+            a.debugName = "CityGiProbeAtlas";
+            probeAtlas_[parity][level] = device->createTexture(a);
+            if (!probeAtlas_[parity][level]) { outError = "city gi: atlas failed"; return false; }
+        }
+    }
+    {
+        nvrhi::TextureDesc p;
+        p.width = kCityGiBaseRes; p.height = kCityGiBaseRes;
+        p.format = nvrhi::Format::RGBA32_FLOAT;
+        p.isUAV = true;
+        p.initialState = nvrhi::ResourceStates::ShaderResource;
+        p.debugName = "CityGiPrevDelta";
+        probePrevDelta_ = device->createTexture(p);
+        if (!probePrevDelta_) { outError = "city gi: prevDelta failed"; return false; }
+    }
+    for (std::uint32_t level = 0; level < 4; ++level) {
+        const std::uint32_t res_l = (kCityGiBaseRes >> level) * 10u;
+        nvrhi::TextureDesc i;
+        i.width = res_l; i.height = res_l;
+        i.format = nvrhi::Format::RGBA16_FLOAT;
+        i.isUAV = true;
+        i.initialState = nvrhi::ResourceStates::ShaderResource;
+        i.debugName = "CityGiIrradAtlas";
+        irradAtlas_[level] = device->createTexture(i);
+        if (!irradAtlas_[level]) { outError = "city gi: irrad atlas failed"; return false; }
+    }
+    {
+        nvrhi::TextureDesc g;
+        g.width = vpW; g.height = vpH;
+        g.format = nvrhi::Format::RGBA16_FLOAT;
+        g.isUAV = true;
+        g.initialState = nvrhi::ResourceStates::ShaderResource;
+        g.debugName = "CityGiGatherLinear";
+        gatherLinear_ = device->createTexture(g);
+        if (!gatherLinear_) { outError = "city gi: gather linear failed"; return false; }
+    }
+
+    // ---- world cache 兜底表：trace 布局 t5/t6 槽必须有有效句柄（城市链不走
+    // bounce cache，CB gate 恒 0 → 内容不消费；initWorldCache 同款 desc）。
+    if (!wcChecksums_ || !wcRadiance_) {
+        auto makeDummy = [&](nvrhi::BufferHandle& out, std::uint32_t stride,
+                             const char* name) -> bool {
+            nvrhi::BufferDesc d;
+            d.byteSize = kWcCapacity * stride;
+            d.structStride = stride;
+            d.canHaveUAVs = true;
+            d.initialState = nvrhi::ResourceStates::CopyDest;
+            d.keepInitialState = true;
+            d.debugName = name;
+            out = device->createBuffer(d);
+            if (!out) outError = std::string("city gi: dummy wc failed for ") + name;
+            return out != nullptr;
+        };
+        if (!makeDummy(wcChecksums_, 4, "CityGiWcChecksums") ||
+            !makeDummy(wcRadiance_, 16, "CityGiWcRadiance"))
+            return false;
+    }
+
+    // ---- 绑定集（probe 同款，纹理换成城市链句柄；TLAS = 城市自有 cityTlas_）。
+    for (std::uint32_t parity = 0; parity < 2; ++parity) {
+        {
+            nvrhi::BindingSetDesc s;
+            s.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, probeCB_))
+             .addItem(nvrhi::BindingSetItem::Texture_SRV(0, probeDepth_))
+             .addItem(nvrhi::BindingSetItem::Texture_SRV(1, velocity_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                s.addItem(nvrhi::BindingSetItem::Texture_UAV(level, probeAtlas_[parity][level]));
+            s.addItem(nvrhi::BindingSetItem::Texture_UAV(4, probePrevDelta_));
+            placeSet_[parity] = device->createBindingSet(s, placeLayout_);
+            if (!placeSet_[parity]) { outError = "city gi: place set failed"; return false; }
+        }
+        {
+            nvrhi::BindingSetDesc s;
+            s.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, traceCB_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                s.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
+            s.addItem(nvrhi::BindingSetItem::RayTracingAccelStruct(4, cityTlas_));
+            s.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(5, wcChecksums_));
+            s.addItem(nvrhi::BindingSetItem::StructuredBuffer_SRV(6, wcRadiance_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                s.addItem(nvrhi::BindingSetItem::Texture_UAV(level, irradAtlas_[level]));
+            traceSet_[parity] = device->createBindingSet(s, traceLayout_);
+            if (!traceSet_[parity]) { outError = "city gi: trace set failed"; return false; }
+        }
+        {
+            nvrhi::BindingSetDesc s;
+            s.addItem(nvrhi::BindingSetItem::ConstantBuffer(0, gatherCB_));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                s.addItem(nvrhi::BindingSetItem::Texture_SRV(level, probeAtlas_[parity][level]));
+            for (std::uint32_t level = 0; level < 4; ++level)
+                s.addItem(nvrhi::BindingSetItem::Texture_SRV(4 + level, irradAtlas_[level]));
+            s.addItem(nvrhi::BindingSetItem::Texture_SRV(8, probeDepth_));
+            s.addItem(nvrhi::BindingSetItem::Texture_SRV(9, hdrSceneColor_));
+            s.addItem(nvrhi::BindingSetItem::Texture_UAV(0, gatherLinear_));
+            s.addItem(nvrhi::BindingSetItem::Texture_UAV(1, hdrSceneColor_));
+            gatherSet_[parity] = device->createBindingSet(s, gatherLayout_);
+            if (!gatherSet_[parity]) { outError = "city gi: gather set failed"; return false; }
+        }
+    }
+
+    cityGiW_ = vpW;
+    cityGiH_ = vpH;
+    cityGiActive_ = true;
+    cityGiFirstFrame_ = true;
+    nl::core::log::infoCh("city-gi", "probe GI ready: baseRes=", kCityGiBaseRes,
+                          " tlasInstances=", cityTlasInstanceCount_);
+    return true;
+}
+
+// runCityGi：城市渲染完成后、presentTonemap 前调用。place→trace→gather→compose
+// 四连；compose RMW hdrSceneColor_（probe gather 同款契约：presentTonemap 自己
+// 转 SRV）。无 velocity prepass：probeDepth_ 由 t0Depth_（DepthWrite 永驻态）
+// CopySource 瞬态拷贝；velocity 每帧清零（csPlace 的 prevUV 链路恒 no-op）。
+bool Scene::runCityGi(nvrhi::ICommandList* cmd, const FrameParams& params,
+                      const nvrhi::Viewport& viewport, std::string& outError) {
+    if (!cityGiActive_ || !cityTlasReady_) return true;   // ensure 已报错，静默降级
+    if (!probeDepth_ || !hdrSceneColor_ || !velocity_ || !t0Depth_) {
+        outError = "city gi: frame targets missing";
+        return false;
+    }
+    const nvrhi::TextureSubresourceSet allSub(0, nvrhi::TextureSubresourceSet::AllMipLevels,
+                                              0, nvrhi::TextureSubresourceSet::AllArraySlices);
+    const float vpW = viewport.maxX - viewport.minX;
+    const float vpH = viewport.maxY - viewport.minY;
+    const std::uint32_t res = kCityGiBaseRes;
+
+    // ---- (1) 深度拷贝：t0Depth_ DepthWrite→CopySource 瞬态（readback 同款显式
+    // 转换口径），probeDepth_ CopyDest→SRV（下帧声明的末态）。
+    cmd->setTextureState(t0Depth_, allSub, nvrhi::ResourceStates::CopySource);
+    cmd->setTextureState(probeDepth_, allSub, nvrhi::ResourceStates::CopyDest);
+    cmd->copyTexture(probeDepth_, nvrhi::TextureSlice(), t0Depth_, nvrhi::TextureSlice());
+    cmd->setTextureState(t0Depth_, allSub, nvrhi::ResourceStates::DepthWrite);
+    cmd->setTextureState(probeDepth_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (2) velocity 清零（probe 帧首同款三步：RT 态 → clear → 回 SRV）。
+    cmd->setTextureState(velocity_, allSub, nvrhi::ResourceStates::RenderTarget);
+    cmd->clearTextureFloat(velocity_, allSub, nvrhi::Color(0.f, 0.f, 0.f, 0.f));
+    cmd->setTextureState(velocity_, allSub, nvrhi::ResourceStates::ShaderResource);
+
+    // ---- (3) probeCB_ 全量覆写（192B = 48 floats）：csPlace 只读 [0..23]。
+    float pcb[48] = {};
+    {
+        nl::math::Mat4 vp{}, invVP{};
+        std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+        invVP = nl::math::inverseMat4(vp);
+        std::memcpy(pcb, invVP.m, sizeof(invVP.m));
+        pcb[16] = params.eye[0];
+        pcb[17] = params.eye[1];
+        pcb[18] = params.eye[2];
+        pcb[19] = params.projYScale;
+        pcb[20] = vpW;
+        pcb[21] = vpH;
+        pcb[22] = static_cast<float>(res);
+        pcb[23] = params.probeNormalOffset;
+    }
+    cmd->writeBuffer(probeCB_, pcb, sizeof(pcb));
+
+    // ---- (4) traceCB_ 全量覆写（128B = 32 floats，initProbe 同布局）：灯 =
+    // 城市天气太阳（weatherSunCol/weatherSunIntensity）；bounce/DIAG/抖动全 0。
+    {
+        float tcb[32] = {};
+        tcb[0] = params.lightDir[0]; tcb[1] = params.lightDir[1]; tcb[2] = params.lightDir[2];
+        tcb[4] = params.weatherSunCol[0]; tcb[5] = params.weatherSunCol[1];
+        tcb[6] = params.weatherSunCol[2];
+        tcb[7] = 2.5f * params.weatherSunIntensity;
+        tcb[8] = 0.45f; tcb[9] = 0.39f; tcb[10] = 0.30f;    // 统一暖灰 albedo（M10.1 口径）
+        tcb[11] = params.lightDir[3];                        // ambient
+        tcb[12] = 0.01f; tcb[13] = 50.0f;                    // shadow bias / tMax
+        tcb[14] = static_cast<float>(res); tcb[15] = 8.0f;   // baseRes / octRes
+        tcb[20] = params.weatherZenith[0]; tcb[21] = params.weatherZenith[1];
+        tcb[22] = params.weatherZenith[2];
+        tcb[24] = params.weatherHorizon[0]; tcb[25] = params.weatherHorizon[1];
+        tcb[26] = params.weatherHorizon[2];
+        tcb[28] = params.weatherFogDensity; tcb[29] = params.weatherFogHeight;
+        cmd->writeBuffer(traceCB_, tcb, sizeof(tcb));
+    }
+
+    // ---- (5) gatherCB_ 全量覆写（192B = 48 floats）：深度选级阈值城市尺度
+    // {20,50,120}（缺省 {3,5,7} 是小模型机位）；skyBg=0（城市自有天穹 pass）。
+    float gcb[48] = {};
+    {
+        nl::math::Mat4 vp{};
+        std::memcpy(vp.m, params.viewProj, sizeof(vp.m));
+        const nl::math::Mat4 invVP = nl::math::inverseMat4(vp);
+        std::memcpy(gcb, invVP.m, sizeof(invVP.m));
+        gcb[16] = params.eye[0];
+        gcb[17] = params.eye[1];
+        gcb[18] = params.eye[2];
+        gcb[20] = static_cast<float>(res);
+        gcb[21] = vpW;
+        gcb[22] = vpH;
+        gcb[23] = 8.0f;
+        gcb[24] = 0.45f; gcb[25] = 0.39f; gcb[26] = 0.30f;
+        gcb[27] = 0.01f;
+        gcb[28] = 20.0f; gcb[29] = 50.0f; gcb[30] = 120.0f;  // Q13-1 城市尺度分段
+        gcb[31] = 0.0f;                                      // skyBg 关（城市天穹 pass 直出）
+        gcb[32] = params.weatherZenith[0]; gcb[33] = params.weatherZenith[1];
+        gcb[34] = params.weatherZenith[2];
+        gcb[36] = params.weatherHorizon[0]; gcb[37] = params.weatherHorizon[1];
+        gcb[38] = params.weatherHorizon[2];
+        gcb[40] = params.weatherFogDensity; gcb[41] = params.weatherFogHeight;
+    }
+    cmd->writeBuffer(gatherCB_, gcb, sizeof(gcb));
+
+    // ---- (6) 帧首状态声明（跨帧契约：上一帧末态；跨命令列表 tracking 必须每帧重建）。
+    for (std::uint32_t level = 0; level < 4; ++level)
+        cmd->beginTrackingTextureState(probeAtlas_[cityGiParity_][level], allSub,
+                                       nvrhi::ResourceStates::ShaderResource);
+    cmd->beginTrackingTextureState(probePrevDelta_, allSub,
+                                   nvrhi::ResourceStates::UnorderedAccess);
+    for (std::uint32_t level = 0; level < 4; ++level)
+        cmd->beginTrackingTextureState(irradAtlas_[level], allSub,
+                                       nvrhi::ResourceStates::ShaderResource);
+    cmd->beginTrackingTextureState(gatherLinear_, allSub,
+                                   cityGiFirstFrame_ ? nvrhi::ResourceStates::ShaderResource
+                                                     : nvrhi::ResourceStates::UnorderedAccess);
+    cityGiFirstFrame_ = false;
+
+    // ---- (7) csPlace dispatch。
+    nvrhi::ComputeState cstate;
+    cstate.setPipeline(placePSO_).addBindingSet(placeSet_[cityGiParity_]);
+    cmd->setComputeState(cstate);
+    cmd->dispatch((res + 7u) / 8u, (res + 7u) / 8u, 1u);
+
+    // ---- (8) csTrace dispatch（10×10 八面体格：res*10 线程² × 4 级）。
+    nvrhi::ComputeState tstate;
+    tstate.setPipeline(tracePSO_).addBindingSet(traceSet_[cityGiParity_]);
+    cmd->setComputeState(tstate);
+    const std::uint32_t store = 10u;
+    cmd->dispatch(((res * store) + 7u) / 8u, ((res * store) + 7u) / 8u, 4u);
+
+    // ---- (9) csGather dispatch（全屏 8×8 线程组）。
+    nvrhi::ComputeState gstate;
+    gstate.setPipeline(gatherPSO_).addBindingSet(gatherSet_[cityGiParity_]);
+    cmd->setComputeState(gstate);
+    cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+
+    // ---- (10) csGatherCompose：hdr RenderTarget（城市渲染刚写完）→ UAV RMW。
+    cmd->setTextureState(hdrSceneColor_, allSub, nvrhi::ResourceStates::UnorderedAccess);
+    nvrhi::ComputeState pstate;
+    pstate.setPipeline(gatherComposePSO_).addBindingSet(gatherSet_[cityGiParity_]);
+    cmd->setComputeState(pstate);
+    cmd->dispatch((std::uint32_t(vpW) + 7u) / 8u, (std::uint32_t(vpH) + 7u) / 8u, 1u);
+
+    cityGiParity_ ^= 1u;
+    return true;
 }
 
 // M10.2：final gather（drawProbeFrame 之后、presentTonemap 之前）。csGather 写
@@ -10291,6 +10838,28 @@ bool Scene::initScene(nvrhi::IDevice* device, const char* shaderSuffix,
         assetSphere_[3] = radius;
     }
 
+    // ---- M-CITY-LIT：城市 BLAS/TLAS（探针 GI 地基；失败 skip 不拦路）----
+    // 必须在 initScene 本函数内（prepared 还活着；sceneBatchObjects_ 已填好）。
+    {
+        std::vector<CityBlasInput> blasInputs;
+        blasInputs.reserve(prepared.size());
+        for (const PreparedBatch& pb : prepared) {
+            blasInputs.push_back({pb.vertices.data(),
+                                  static_cast<std::uint32_t>(pb.vertices.size()),
+                                  pb.indices.data(),
+                                  static_cast<std::uint32_t>(pb.indices.size())});
+        }
+        std::string cityErr;
+        if (!initCityBlas(device, blasInputs, cityErr)) {
+            outError = "initCityBlas: " + cityErr;
+            return false;
+        }
+        if (!initCityTlas(device, objects, objectCount, cityErr)) {
+            outError = "initCityTlas: " + cityErr;
+            return false;
+        }
+    }
+
     // ---- 8. 计数与名字回带（backend → DeviceInfo → viewer HUD/日志）----
     modelName_ = sceneName;
     sceneInstanceCount_ = objectCount;
@@ -10509,6 +11078,18 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
     // 不设 startInstanceLocation：DX12 不把 StartInstanceLocation 计入 SV_InstanceID，
     // 旧实现多 batch 时所有批次都读实例槽 0（详见第 5 步与 MILESTONES 踩坑）。
     if (sceneMode_) {
+        // ---- M-CITY-LIT：--gi 城市探针 GI。渲染前 ensure（ambient 置零闸需要
+        // cityGiActive_ 提前就位）；渲染后 runCityGi 四连（compose 在 tonemap 前，
+        // probe gather 同款契约）。t0Active = 离屏 HDR 目标就绪（velocity_ 同批建）。
+        if (params.cityGi && !cityGiFailed_ && t0Active && cityTlasReady_) {
+            std::string giErr;
+            const std::uint32_t giW = static_cast<std::uint32_t>(viewport.maxX - viewport.minX);
+            const std::uint32_t giH = static_cast<std::uint32_t>(viewport.maxY - viewport.minY);
+            if (!ensureCityGi(t0Device_, giW, giH, giErr)) {
+                nl::core::log::deviceError("city-gi", giErr);
+                cityGiFailed_ = true;   // 一次性报错，后续帧静默降级纯直光
+            }
+        }
         // ---- M-NL1：最强点光源屏幕投影（单光源首版，草案 §M-NL1 拍板口径）。
         // 得分 = intensity × 亮度权重（Rec.709）；clip = mvp·p（列主序，
         // vsScene 的 mul(g_mvp, float4(world,1)) 同式）。视锥外/相机后 → 当帧
@@ -10675,7 +11256,14 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         // 用例 bytes 保形。writeBuffer 对非 hostAccessible buffer 走 NVRHI 内部
         // upload 暂存 + CopyBufferRegion（require CopyDest 插 barrier）——最初
         // 直接报错是 init 设了 permanent 拦截 require，非 writeBuffer 能力问题。
-        if (params.weatherAmbientScale != 1.0f) {
+        if (params.cityGi && cityGiActive_) {
+            // M-CITY-LIT：GI 接管间接光——psScene ambient 置零（g_lights[0].y
+            // 唯一 ambient 源；probe gather「真替换」Q13-2 同款口径）。
+            const float head[4] = { static_cast<float>(sceneLightCount_), 0.0f,
+                                    sceneLightInvSumI_,
+                                    static_cast<float>(sceneLightPointCount_) };
+            cmd->writeBuffer(sceneLights_, head, sizeof(head));
+        } else if (params.weatherAmbientScale != 1.0f) {
             const float head[4] = { static_cast<float>(sceneLightCount_),
                                     sceneAmbient_ * params.weatherAmbientScale,
                                     sceneLightInvSumI_,
@@ -10754,6 +11342,13 @@ void Scene::draw(nvrhi::ICommandList* cmd, nvrhi::IFramebuffer* framebuffer,
         // M-RT0：后视镜二次绘制——主 pass 已用 constants_ 画完，这里以 mirrorMvp
         // 覆写同一 CB 把 sceneBatches_ 再画一遍到半分辨率 mirrorFb_（旗标关 = 整块
         // 不进，逐字节保形）。present 阶段由 backend 调 presentMirror 贴角落。
+        // ---- M-CITY-LIT：城市探针 GI 四连（place→trace→gather→compose），
+        // compose RMW hdrSceneColor_，presentTonemap 前完成。
+        if (params.cityGi && cityGiActive_) {
+            std::string giErr;
+            if (!runCityGi(cmd, params, viewport, giErr))
+                nl::core::log::deviceError("city-gi", giErr);
+        }
         if (params.mirrorEnable) {
             std::string mirrorErr;
             drawMirror(cmd, params, viewport.maxX - viewport.minX,
@@ -12391,6 +12986,18 @@ void Scene::shutdown() {
     tlasFrameIndex_ = 0;
     tlasTimer_.shutdown();
     tlas_ = nullptr;
+    // M-CITY-LIT：城市 AS 清单——先 TLAS（引用方）后 BLAS（被引用方），
+    // NVRHI 句柄置空即释放（与上方 tlas_ 同口径；声明逆序析构兜底不冲突）。
+    cityTlasReady_ = false;
+    cityTlasInstanceCount_ = 0;
+    cityTlasTimer_.shutdown();
+    cityTlas_ = nullptr;
+    cityBlasReady_ = false;
+    cityBlasTimer_.shutdown();
+    for (auto& b : cityBlas_) b = nullptr;
+    for (auto& b : cityBlasVB_) b = nullptr;
+    for (auto& b : cityBlasIB_) b = nullptr;
+    cityBlas_.clear(); cityBlasVB_.clear(); cityBlasIB_.clear();
     probeReady_ = false;
     probeFailed_ = false;
     probeSubmitted_ = 0;
