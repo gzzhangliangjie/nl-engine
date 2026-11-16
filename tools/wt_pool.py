@@ -417,6 +417,23 @@ TRACKS = {
                 "Plan docs/citygen/CG0-PLAN.md + docs/game3/S-PLAN.md. "
                 "A-class tool-track deliverable, no kStage bump.",
     },
+    "game": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-game",
+        "branch": "feat/game", "state": "planned",
+        "note": "Game 3 (Guangzhou map) GAME-DEV-ORDER step 7, user approved "
+                "2026-11-16: minimum playable = standalone game.exe with "
+                "player vehicle driving inside the CG2 Zhujiang New Town "
+                "city + impact feedback. Scope ruling = city closed loop "
+                "(build Jolt static boxes from CG2 building transforms, "
+                "real collision not soft). Host = independent game.exe "
+                "(viewer stays pure showcase, zero regression). Collision "
+                "tech = add core API (DebugScene::addStaticBox batch + "
+                "impact intensity readback), core additive-only (existing "
+                "signatures/exports/viewer baseline unchanged). Feedback = "
+                "camera trauma/shake + audio WAV + contact event log/HUD "
+                "(no debugLines visualization). Plan docs/game3/STEP7-PLAN.md. "
+                "kStage S8.3 unchanged, renderer/viewer source untouched.",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
