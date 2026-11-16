@@ -396,6 +396,27 @@ TRACKS = {
                 "close gate + release --done passed; "
                 "reopen via 7.1b (claim --force)",
     },
+    "citygen": {
+        "wt": "E:/UE_STUDY_2026/nl-engine-citygen",
+        "branch": "feat/citygen", "state": "active",
+        "note": "Game 3 (Guangzhou map) step 1, user approved 2026-11-16: "
+                "citygen standalone self-research library at modules/citygen/ "
+                "(NOT thirdparty - 11-15 ruling), pluggable inputs: "
+                "OSM import (new, M-CG0) + procedural grid (existing "
+                "city-tools, later milestone) -> shared content generation "
+                "-> unified outputs city.scene.engine + roadnet.json + "
+                "overhead PNG + CLI shell. M-CG0 scope: OSM input source "
+                "(Overpass [out:json] parse via vendored nlohmann, zero new "
+                "deps), scope = regional pilot (user approved, ~2-3km e.g. "
+                "Zhujiang New Town), NOT full city (streaming stays at "
+                "GAME-DEV-ORDER step 10). Reference assets: "
+                "E:/GuangzhouBusViewer (2026-10-29 full-GZ highway pull: 64 "
+                "tiles assets/_pull-roadnet/ + merged routing-graph.json "
+                "68.4MB 513k junctions/710k edges; 5-mirror Overpass list "
+                "proven; GCJ-02 only for Amap basemap, engine uses WGS-84). "
+                "Plan docs/citygen/CG0-PLAN.md + docs/game3/S-PLAN.md. "
+                "A-class tool-track deliverable, no kStage bump.",
+    },
 }
 
 LOCK_NAME = ".wt_pool_busy.json"
