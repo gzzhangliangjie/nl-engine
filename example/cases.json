@@ -15916,7 +15916,7 @@
      "id": "convert",
      "name": "convert：珠江新城 fixture → roadnet.json（375 节点/417 边）",
      "kind": "tool",
-     "note": "输入 = tile-3-2 裁剪 fixture（300 ways，BusViewer 2026-10-29 分片）；bbox 23.108,113.316,23.130,113.342。",
+     "note": "输入 = tile-3-2 裁剪 fixture（300 ways，BusViewer 2026-10-29 分片）；bbox 23.108,113.316,23.130,113.342。 (cwd={root}: 相对路径输入,regression case 级 cwd 覆盖)",
      "args": [
       "convert",
       "--input",
@@ -15928,13 +15928,14 @@
      ],
      "expectExit": 0,
      "expectLog": "nodes=375 edges=417",
-     "command": "citygen convert --input modules/citygen/test/zjx-sample.json --bbox 23.108,113.316,23.130,113.342 --out example/cg0-m0/roadnet.json"
+     "command": "citygen convert --input modules/citygen/test/zjx-sample.json --bbox 23.108,113.316,23.130,113.342 --out example/cg0-m0/roadnet.json",
+     "cwd": "{root}"
     },
     {
      "id": "export",
      "name": "export：路网+建筑 → 四件套（roadnet/city.scene/box.obj/top.png+ODbL 署名）",
      "kind": "tool",
-     "note": "150 栋（含西塔 440.2m，80 栋 label 真名）；png 2048×1875 bldPx=263136 是确定性锚。",
+     "note": "150 栋（含西塔 440.2m，80 栋 label 真名）；png 2048×1875 bldPx=263136 是确定性锚。 (cwd={root}: 相对路径输入,regression case 级 cwd 覆盖)",
      "args": [
       "export",
       "--input",
@@ -15948,7 +15949,8 @@
      ],
      "expectExit": 0,
      "expectLog": "buildings=150",
-     "command": "citygen export --input modules/citygen/test/zjx-sample.json --buildings modules/citygen/test/zjx-buildings-sample.json --bbox 23.108,113.316,23.130,113.342 --out example/cg0-m0"
+     "command": "citygen export --input modules/citygen/test/zjx-sample.json --buildings modules/citygen/test/zjx-buildings-sample.json --bbox 23.108,113.316,23.130,113.342 --out example/cg0-m0",
+     "cwd": "{root}"
     },
     {
      "id": "negative",
