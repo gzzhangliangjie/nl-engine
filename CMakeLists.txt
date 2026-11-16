@@ -827,6 +827,7 @@ add_custom_target(nl_scriptapi_freshness ALL
     COMMENT "scriptapi: exports.api vs generated freshness gate")
 
 add_subdirectory(viewer)
+add_subdirectory(game)   # M-GAME0: standalone playable game.exe (renderer exe, parallel to viewer)
 # ---- M-MOD0：自研模块统一从 modules/ 按 NL_MODULES 开关装入（含 ctest 用例；----
 # ---- nanite-tools 同构并入：独立 exe 只链 nl_core，2026-11-15 M-MOD0.2 挪入）----
 foreach(_m ${_nl_modules_selected})

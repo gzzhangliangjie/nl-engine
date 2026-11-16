@@ -75,3 +75,18 @@ exit: 0 ok / 1 runtime / 2 usage
 - 反馈三路按拍板：震屏 + 音效 + 事件日志+HUD；接触点 debugLines 可视化不做、不追加；
 - 撞击为物理接触（真挡车），不做软碰撞探测；
 - 输入为键盘 WASD（复用 `rawKeyDown` 只读口径，不接 `updateFromWindow`）；本轮不做手柄。
+
+## 7. 收官证据（2026-11-17 补录）
+
+- **落点与形态**：`game/main.cpp`（约 550 行）+ `game/CMakeLists.txt`，根 `CMakeLists.txt` `add_subdirectory(game)`；PLAN §4.2 的 `modules/game/` 设想按实际落为仓库根 `game/`（与 viewer 同级，渲染型 exe 骨架）。
+- **构建**：DX12 r15 / VULKAN final，双后端 BUILD OK（errors=0）。
+- **selftest**：`game-m0 selftest: PASS (city static collision + impact, GameClock, trauma determinism)`；ctest `game-m0-selftest` 双后端绿。
+- **phys-tools city-impact**：`phys-game0 city-impact: PASS` 双后端，0 checks failed（hits>0 / owner 归属 / clear 归零 / 双跑确定性）。
+- **双后端基线实跑**（`--city example/cg2-m0 --seed 1 --steps 240`）逐位一致：
+  - `GAME_IMPACT frame_hits=1 owner=113 strength=4.7787 impulse=7167.9883 pos=(87.16,4.50,3.28)`
+  - `game-m0: frames=16 steps=240 objects=160 boxes=150 hits=1 speed=0.027 odometer_pos=(-0.00,0.86,-30.33) shake=0.0000`
+  - 基线 PNG 双后端 sha256 相同 = `c6c0fbbb142c80774f13679d18a1e9a7b7c7d003b9d4df9b8ede4f6719a21fe8`
+- **负向**：scene 目录不存在 → resolve 期 exit 2 + `game: scene not found …`（loadCity json 损坏路径才是 exit 1；run.bat seg6 验 errorlevel≥1）。
+- **run.bat 六段**：`example/game-m0/run.bat`（selftest / phys 锚双后端 / DX 基线 / VK 基线 / DX 复跑逐字节 / 负向）。
+- ** cases.json**：`game-m0` 卡（exe 双后端字典 + selftest/street/negative 三 case + preview）。
+- **与 PLAN 差异记录**：撞击反馈实测走"事件日志 + HUD + 震屏 + 音效"四路齐备；spawn 空位选点使玩家车避开局型 OSM 板楼盒（原点被 87m 板楼覆盖的坑已记入 §4.1 G0.2 之外的实现注记）；负向退出码实测=scene 不存在 resolve 期 exit 2（PLAN §4.2 的 usage=2 口径吻合，runtime 1 仅 loadCity json 损坏路径）。

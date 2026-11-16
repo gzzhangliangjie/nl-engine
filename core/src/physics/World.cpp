@@ -50,6 +50,7 @@
 #include <cstdio>
 #include <mutex>
 #include <unordered_map>
+#include <unordered_set>
 #include <utility>
 
 using namespace JPH::literals;
@@ -1264,10 +1265,61 @@ public:
     std::uint32_t removed   = 0;
     std::uint32_t wallHits  = 0;
 
+    // M-GAME0 additive city impact tracking. Empty by default -> the frozen
+    // scenario-2 training-ground behaviour (wallHits/added/...) is bit-identical.
+    std::unordered_map<std::uint32_t, std::uint64_t> cityOwners; // bodyId raw -> entity id
+    // Only the player chassis counts as impact counterpart: adjacent city AABBs
+    // overlap each other (rotation ignored) and static-static spawn overlaps
+    // must not count as "drove into a building".
+    std::unordered_set<std::uint32_t> chassisRaw;
+    std::uint32_t cityHits    = 0;
+    std::uint64_t cityOwner   = 0;
+    float cityPos[3]          = {0.0f, 0.0f, 0.0f};
+    float cityStrength        = 0.0f;
+    float cityImpulse         = 0.0f;
+    bool  cityHit             = false;
+
     void OnContactAdded(const JPH::Body& b1, const JPH::Body& b2,
                         const JPH::ContactManifold&, JPH::ContactSettings&) override {
         ++added;
         if (b1.GetID() == wallId || b2.GetID() == wallId) ++wallHits;
+        if (cityOwners.empty()) return;
+
+        // A city box is static; the counterpart that reaches here is the dynamic
+        // chassis (static-static pairs never produce contacts). Record which
+        // building and the chassis horizontal speed at contact.
+        const JPH::Body* box  = nullptr;
+        const JPH::Body* car  = nullptr;
+        std::uint64_t owner   = 0;
+        auto it1 = cityOwners.find(b1.GetID().GetIndexAndSequenceNumber());
+        if (it1 != cityOwners.end()) { box = &b1; car = &b2; owner = it1->second; }
+        else {
+            auto it2 = cityOwners.find(b2.GetID().GetIndexAndSequenceNumber());
+            if (it2 != cityOwners.end()) { box = &b2; car = &b1; owner = it2->second; }
+        }
+        if (!box || !car) return;
+        if (!chassisRaw.empty() &&
+            chassisRaw.find(car->GetID().GetIndexAndSequenceNumber()) == chassisRaw.end()) {
+            return; // box <-> overlapping city box (or foreign body): not a player impact
+        }
+        ++cityHits;
+        cityHit   = true;
+        cityOwner = owner;
+        const JPH::RVec3 p = box->GetPosition();
+        cityPos[0] = static_cast<float>(p.GetX());
+        cityPos[1] = static_cast<float>(p.GetY());
+        cityPos[2] = static_cast<float>(p.GetZ());
+        if (car && car->GetMotionType() == JPH::EMotionType::Dynamic) {
+            const JPH::Vec3 v = car->GetLinearVelocity();
+            const float speed = std::sqrt(v.GetX() * v.GetX() + v.GetZ() * v.GetZ());
+            cityStrength = speed;
+            // Deterministic impulse proxy: chassis mass * closing speed. No RNG,
+            // no solver-order dependence -> stable across DX12/VULKAN fixed step.
+            // Jolt Body exposes inverse mass (0 for static); dynamic chassis has
+            // a finite inverse mass, so reciprocal is its mass in kg.
+            const float invMass = car->GetMotionProperties()->GetInverseMassUnchecked();
+            cityImpulse  = invMass > 1e-8f ? speed / invMass : 0.0f;
+        }
     }
     void OnContactPersisted(const JPH::Body&, const JPH::Body&,
                             const JPH::ContactManifold&, JPH::ContactSettings&) override {
@@ -1326,6 +1378,9 @@ struct DebugScene::Impl : QueryHost {
     std::vector<JPH::BodyID> courseIds;
     DriveInputState driveInput;   // slot 0 的输入镜像（setDriveInput 既有语义）
     std::unique_ptr<SceneContactCounter> contactCounter;
+    // M-GAME0: city static boxes added post-build (scenario 2). Destroyed on
+    // clearCityBoxes() / next build(); contactCounter.cityOwners mirrors ids.
+    std::vector<JPH::BodyID> cityBoxIds;
 
     Impl()
         : objectVsBroadPhaseLayerFilter(matrix)
@@ -1783,6 +1838,102 @@ int DebugScene::activeVehicleCount() const {
         if (s.used) ++n;
     }
     return n;
+}
+
+// ---- M-GAME0: city static boxes + impact readback (additive, scenario 2) ----
+int DebugScene::addCityBoxes(const float positions[][3], const float halfExtents[][3],
+                             const std::uint64_t* owners, int count, std::uint32_t layer) {
+    if (!impl_ || !impl_->valid || impl_->scenario != 2) return 0;
+    if (count <= 0 || !positions || !halfExtents || !owners) return 0;
+    if (layer >= kLayerCount) {
+        impl_->error = "addCityBoxes: layer out of range";
+        return 0;
+    }
+    JPH::BodyInterface& bi = *impl_->bodyInterface;
+    int added = 0;
+    for (int i = 0; i < count; ++i) {
+        const JPH::Vec3 half(halfExtents[i][0], halfExtents[i][1], halfExtents[i][2]);
+        JPH::BoxShapeSettings shape(half);
+        shape.SetEmbedded();
+        auto r = shape.Create();
+        if (r.HasError()) {
+            impl_->error = "addCityBoxes: box shape failed";
+            continue;
+        }
+        JPH::BodyCreationSettings bcs(
+            r.Get(),
+            JPH::RVec3(JPH::Real(positions[i][0]), JPH::Real(positions[i][1]),
+                       JPH::Real(positions[i][2])),
+            JPH::Quat::sIdentity(), JPH::EMotionType::Static,
+            static_cast<JPH::ObjectLayer>(layer));
+        JPH::BodyID id = bi.CreateAndAddBody(bcs, JPH::EActivation::DontActivate);
+        if (id.IsInvalid()) {
+            impl_->error = "addCityBoxes: body add failed";
+            continue;
+        }
+        impl_->cityBoxIds.push_back(id);
+        if (impl_->contactCounter) {
+            impl_->contactCounter->cityOwners[id.GetIndexAndSequenceNumber()] = owners[i];
+            // Whitelist the player chassis as the only valid impact counterpart.
+            for (const Impl::VehicleSlot& s : impl_->vehicles) {
+                if (s.used) impl_->contactCounter->chassisRaw.insert(
+                    s.chassisId.GetIndexAndSequenceNumber());
+            }
+        }
+        ++added;
+    }
+    if (added > 0) {
+        impl_->physicsSystem.OptimizeBroadPhase();
+        impl_->totalBodies = impl_->physicsSystem.GetNumBodies();
+    }
+    return added;
+}
+
+void DebugScene::clearCityBoxes() {
+    if (!impl_ || impl_->cityBoxIds.empty()) return;
+    JPH::BodyInterface& bi = *impl_->bodyInterface;
+    for (JPH::BodyID id : impl_->cityBoxIds) {
+        // All city boxes are in-scene static bodies (Query.cpp unregisterBody
+        // precedent: RemoveBody + DestroyBody, no IsBodyAdded guard in this Jolt).
+        bi.RemoveBody(id);
+        bi.DestroyBody(id);
+        if (impl_->contactCounter)
+            impl_->contactCounter->cityOwners.erase(id.GetIndexAndSequenceNumber());
+    }
+    impl_->cityBoxIds.clear();
+    impl_->totalBodies = impl_->physicsSystem.GetNumBodies();
+    resetImpact();
+}
+
+int DebugScene::cityBoxCount() const {
+    if (!impl_) return 0;
+    return static_cast<int>(impl_->cityBoxIds.size());
+}
+
+ImpactState DebugScene::impactState() const {
+    ImpactState out;
+    if (!impl_ || !impl_->contactCounter || impl_->cityBoxIds.empty()) return out;
+    const SceneContactCounter& c = *impl_->contactCounter;
+    out.hits     = c.cityHits;
+    out.owner    = c.cityOwner;
+    out.pos[0]   = c.cityPos[0];
+    out.pos[1]   = c.cityPos[1];
+    out.pos[2]   = c.cityPos[2];
+    out.strength = c.cityStrength;
+    out.impulse  = c.cityImpulse;
+    out.hit      = c.cityHit;
+    return out;
+}
+
+void DebugScene::resetImpact() {
+    if (!impl_ || !impl_->contactCounter) return;
+    SceneContactCounter& c = *impl_->contactCounter;
+    c.cityHits     = 0;
+    c.cityOwner    = 0;
+    c.cityPos[0] = c.cityPos[1] = c.cityPos[2] = 0.0f;
+    c.cityStrength = 0.0f;
+    c.cityImpulse  = 0.0f;
+    c.cityHit      = false;
 }
 
 } // namespace nl::physics

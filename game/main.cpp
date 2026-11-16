@@ -1,0 +1,685 @@
+// game.exe — M-GAME0 standalone playable game (GAME-DEV-ORDER step 7 minimum
+// playable: drive inside the real CG2 Zhujiang New Town city + impact feedback).
+//
+// Architecture (STEP7-PLAN.md):
+//   - viewer stays pure showcase: this is a SEPARATE exe, viewer source untouched.
+//   - Reuses core public APIs only: GameClock/TickScheduler, physics::DebugScene,
+//     CameraDirector/ChaseCamera, scene::World::deserialise, ContactEvent*,
+//     audio::AudioWorld, renderer::Renderer, CameraTrauma.
+//   - core additive-only: DebugScene::addCityBoxes/impactState (no existing
+//     signature changed); DriveViewState layout untouched.
+//   - Feedback = shake (CameraTrauma) + audio (WAV source) + event log/HUD.
+//   - No debugLines visualization (per ruling), no AI traffic, no streaming.
+//
+// Exit: 0 = pass, 1 = runtime, 2 = usage. Same contract as other tools.
+
+#include "nl/physics/World.hpp"
+#include "nl/physics/query.hpp"
+#include "nl/core/game_clock.hpp"
+#include "nl/core/tick_groups.hpp"
+#include "nl/core/camera_director.hpp"
+#include "nl/core/camera_smoother.hpp"
+#include "nl/core/window.hpp"
+#include "nl/core/log.hpp"
+#include "nl/core/crash.hpp"
+#include "nl/audio/AudioWorld.hpp"
+#include "nl/scene/World.hpp"
+#include "nl/scene/Component.hpp"
+#include "nl/renderer/renderer.hpp"
+
+#include <nlohmann/json.hpp>
+
+// Multi-GPU machines (e.g. RTX 4060 laptop + Intel iGPU): Windows defaults NEW
+// exe paths to the power-saving iGPU. This machine's Intel drivers crash with
+// this engine on BOTH backends (DX12: AV inside igd12um64xel CreateCommand-
+// Signature; Vulkan: Intel ICD exposes no Vulkan-1.3 vkCmdPipelineBarrier2 ->
+// null dispatch call at Hud::init). NVIDIA/AMD's documented per-process
+// mechanism: export these two symbols to request the high-performance GPU.
+#ifndef WIN32_LEAN_AND_MEAN
+#define WIN32_LEAN_AND_MEAN
+#endif
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+extern "C" __declspec(dllexport) DWORD NvOptimusEnablement = 0x00000001;
+extern "C" __declspec(dllexport) int AmdPowerXpressRequestHighPerformance = 0x00000001;
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <cstdio>
+#include <cstring>
+#include <filesystem>
+#include <fstream>
+#include <iostream>
+#include <limits>
+#include <memory>
+#include <string>
+#include <vector>
+
+namespace {
+
+struct Options {
+    bool selftest = false;
+    bool verbose = false;
+    bool noHud = false;
+    bool audioRealtime = false;
+    std::string city = "example/cg2-m0";
+    std::string cityScene;        // resolved city/city.scene.engine
+    std::string playScript;       // optional frame-script file
+    std::string screenshot;
+    int screenshotFrame = -1;     // which rendered frame writes the PNG (-1 = last)
+    int width = 960, height = 540;
+    int frames = 8;               // rendered frames before screenshot
+    int steps = 240;              // logic frames total
+    std::uint32_t seed = 1;
+    float yaw = 28.0f, pitch = -10.0f, dist = 30.0f;  // free-cam fallback
+};
+
+void usage() {
+    std::printf(
+        "game.exe - M-GAME0 standalone playable (city driving + impact feedback)\n"
+        "  game.exe --selftest [--verbose]\n"
+        "  game.exe [--city DIR] [--screenshot PATH] [--frames N] [--steps N]\n"
+        "           [--size WxH] [--seed N] [--play-script FILE] [--no-hud]\n"
+        "           [--audio-realtime]  (default audio = offline, headless-safe)\n"
+        "exit: 0 pass / 1 runtime / 2 usage\n");
+}
+
+bool parseSize(const std::string& s, int* w, int* h) {
+    const auto x = s.find('x');
+    if (x == std::string::npos) return false;
+    try {
+        *w = std::stoi(s.substr(0, x));
+        *h = std::stoi(s.substr(x + 1));
+    } catch (...) { return false; }
+    return *w > 0 && *h > 0;
+}
+
+int parseArgs(int argc, char** argv, Options* o) {
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        auto need = [&](const char* name, std::string* out) -> bool {
+            if (i + 1 >= argc) { std::printf("missing value for %s\n", name); return false; }
+            *out = argv[++i]; return true;
+        };
+        if (a == "--selftest") o->selftest = true;
+        else if (a == "--verbose" || a == "-v") o->verbose = true;
+        else if (a == "--no-hud") o->noHud = true;
+        else if (a == "--audio-realtime") o->audioRealtime = true;
+        else if (a == "--city") { if (!need("--city", &o->city)) return 2; }
+        else if (a == "--screenshot") { if (!need("--screenshot", &o->screenshot)) return 2; }
+        else if (a == "--screenshot-frame") {
+            std::string v; if (!need("--screenshot-frame", &v)) return 2;
+            o->screenshotFrame = std::atoi(v.c_str());
+        }
+        else if (a == "--play-script") { if (!need("--play-script", &o->playScript)) return 2; }
+        else if (a == "--frames") {
+            std::string v; if (!need("--frames", &v)) return 2;
+            o->frames = std::atoi(v.c_str()); if (o->frames < 1) return 2;
+        } else if (a == "--steps") {
+            std::string v; if (!need("--steps", &v)) return 2;
+            o->steps = std::atoi(v.c_str()); if (o->steps < 1) return 2;
+        } else if (a == "--size") {
+            std::string v; if (!need("--size", &v)) return 2;
+            if (!parseSize(v, &o->width, &o->height)) return 2;
+        } else if (a == "--seed") {
+            std::string v; if (!need("--seed", &v)) return 2;
+            o->seed = static_cast<std::uint32_t>(std::strtoul(v.c_str(), nullptr, 10));
+        } else if (a == "--yaw") {
+            std::string v; if (!need("--yaw", &v)) return 2; o->yaw = std::atof(v.c_str());
+        } else if (a == "--pitch") {
+            std::string v; if (!need("--pitch", &v)) return 2; o->pitch = std::atof(v.c_str());
+        } else if (a == "--dist") {
+            std::string v; if (!need("--dist", &v)) return 2; o->dist = std::atof(v.c_str());
+        } else if (a == "--help" || a == "-h") { usage(); return 2; }
+        else { std::printf("unknown option: %s\n", a.c_str()); return 2; }
+    }
+    return 0;
+}
+
+// ---- selftest (headless, no window/renderer): verify the whole logic chain ----
+int g_fail = 0;
+void expect(bool ok, const char* what) {
+    if (!ok) { ++g_fail; std::printf("  FAIL: %s\n", what); }
+}
+
+// Deterministic frame-script: forward for a while then brake. Used both by
+// --selftest (no script file) and by headless replay (same function -> same path).
+nl::physics::DriveInputState scriptInput(int frame) {
+    nl::physics::DriveInputState in;
+    if (frame < 120) in.forward = 1.0f;      // accelerate toward the buildings
+    else if (frame < 150) in.brake = 1.0f;
+    return in;
+}
+
+int runSelftest(bool verbose) {
+    // 1) core city static box + impact (the real physics anchor lives in phys-tools;
+    //    here we re-verify the exact chain game.exe relies on).
+    {
+        nl::physics::DebugScene ds;
+        std::string err;
+        expect(ds.build(2, 1, &err), "game: DebugScene scenario 2 builds");
+        expect(ds.cityBoxCount() == 0, "game: no city boxes by default");
+        auto s = ds.impactState();
+        expect(!s.hit && s.hits == 0, "game: impact zero before contact");
+        // A building wall 8m ahead, wide enough to catch the chassis (same
+        // conservative geometry as the phys-tools city-impact anchor).
+        const float pos[2][3] = {{0.0f, 5.0f, 8.0f}, {6.0f, 5.0f, 16.0f}};
+        const float half[2][3] = {{8.0f, 5.0f, 1.0f}, {8.0f, 5.0f, 1.0f}};
+        const std::uint64_t ids[2] = {101, 202};
+        expect(ds.addCityBoxes(pos, half, ids, 2, nl::physics::layers::kDefault) == 2,
+               "game: two city static boxes added");
+        expect(ds.cityBoxCount() == 2, "game: cityBoxCount = 2");
+        for (int f = 0; f < 240; ++f) {
+            ds.setDriveInput(scriptInput(f));
+            ds.step(nl::core::GameClock::kStep);
+        }
+        s = ds.impactState();
+        expect(s.hit && s.hits > 0, "game: driving forward hits a city building");
+        expect(s.owner == 101 || s.owner == 202, "game: impact owner is a building entity");
+        expect(s.strength > 0.0f && s.impulse > 0.0f, "game: impact strength/impulse positive");
+        expect(s.pos[2] > 6.0f && s.pos[2] < 18.0f, "game: impact near the building row");
+        ds.clearCityBoxes();
+        expect(ds.cityBoxCount() == 0, "game: clear removes city boxes");
+        if (verbose) {
+            std::printf("[game-selftest] hits=%u owner=%llu strength=%.3f posZ=%.2f\n",
+                        s.hits, (unsigned long long)s.owner, s.strength, s.pos[2]);
+        }
+    }
+
+    // 2) GameClock fixed-step: 240 steps @ kStep advances tickCount deterministically.
+    {
+        nl::core::GameClock clock;
+        long long ticks = 0;
+        const double ms = nl::core::GameClock::kStep * 1000.0;
+        for (int i = 0; i < 240; ++i) clock.tick(ms, [&](double, std::uint64_t) { ++ticks; });
+        expect(ticks == 240, "game: GameClock runs 240 fixed steps");
+        expect(clock.tickCount() == 240, "game: GameClock tickCount = 240");
+        expect(std::abs(clock.simTime() - 240.0 * nl::core::GameClock::kStep) < 1e-6,
+               "game: GameClock simTime matches fixed step");
+    }
+
+    // 3) CameraTrauma deterministic shake.
+    {
+        nl::core::CameraTrauma t1, t2;
+        t1.addTrauma(1.0f); t2.addTrauma(1.0f);
+        for (int i = 0; i < 30; ++i) { t1.step(1.0f/60.0f); t2.step(1.0f/60.0f); }
+        float a1,b1,c1,a2,b2,c2;
+        t1.offsets(a1,b1,c1); t2.offsets(a2,b2,c2);
+        expect(a1==a2 && b1==b2 && c1==c2, "game: trauma shake deterministic");
+        expect(t1.trauma01() < 1.0f && t1.trauma01() >= 0.0f, "game: trauma decays");
+    }
+
+    if (g_fail) { std::printf("game-m0 selftest: FAIL (%d)\n", g_fail); return 1; }
+    std::printf("game-m0 selftest: PASS (city static collision + impact, GameClock, trauma determinism)\n");
+    return 0;
+}
+
+// ---- Scene load: city.scene.engine -> ECS World + render descs + city boxes ----
+struct CityScene {
+    nl::scene::World world;
+    std::vector<nl::renderer::SceneObjectDesc> objects;
+    std::vector<nl::renderer::SceneLightDesc> lights;
+    std::vector<std::string> meshFiles;   // stable storage for desc.d.meshFile
+    float ambient = 0.28f;
+    int buildingBoxes = 0;
+    int playerObject = -1;   // index into objects[] driven by the live chassis
+    bool ok = false;
+};
+
+bool loadCity(const Options& o, CityScene* cs, std::string* err) {
+    std::ifstream f(o.cityScene, std::ios::binary);
+    if (!f) { *err = "cannot open " + o.cityScene; return false; }
+    nlohmann::json doc;
+    try { f >> doc; }
+    catch (const std::exception& e) { *err = std::string("malformed json: ") + e.what(); return false; }
+    cs->world.getComponentLibrary().registerComponent<nl::scene::TransformComponent>();
+    cs->world.getComponentLibrary().registerComponent<nl::scene::ModelComponent>();
+    cs->world.getComponentLibrary().registerComponent<nl::scene::LightComponent>();
+    if (!cs->world.deserialise(doc, *err)) return false;
+    if (doc.contains("ambient") && doc["ambient"].is_number())
+        cs->ambient = doc["ambient"].get<float>();
+
+    // Entity -> render desc (same collection logic as viewer runScene).
+    std::vector<nl::scene::EntityID> modelIds;
+    for (nl::scene::EntityID id : cs->world.getEntityIDs()) {
+        const auto* light = cs->world.getComponent<nl::scene::LightComponent>(id);
+        if (light) {
+            nl::renderer::SceneLightDesc l{};
+            const float len = std::sqrt(light->direction.x*light->direction.x +
+                                        light->direction.y*light->direction.y +
+                                        light->direction.z*light->direction.z);
+            if (len > 1e-8f) {
+                l.dir[0]=light->direction.x/len; l.dir[1]=light->direction.y/len;
+                l.dir[2]=light->direction.z/len;
+            }
+            l.color[0]=light->color.x; l.color[1]=light->color.y; l.color[2]=light->color.z;
+            l.intensity=light->intensity; l.type=light->type;
+            l.position[0]=light->position.x; l.position[1]=light->position.y; l.position[2]=light->position.z;
+            l.range=light->range; l.shadow=light->shadow;
+            cs->lights.push_back(l);
+        }
+        const auto* model = cs->world.getComponent<nl::scene::ModelComponent>(id);
+        if (model && cs->world.getComponent<nl::scene::TransformComponent>(id)) {
+            cs->meshFiles.push_back(model->meshFile);
+            modelIds.push_back(id);
+        }
+    }
+    // Player chassis has no render mesh in the physics scene; give it a visible
+    // body by appending one extra ECS object driven per-frame by chassisState.
+    // sedan.glb is already a scene mesh (traffic cars), so the GLB is on the
+    // renderer's whitelist.
+    const int kPlayerObjectIndex = static_cast<int>(modelIds.size());
+    cs->meshFiles.push_back("sedan.glb");
+    // Reserve BEFORE taking c_str() pointers: vector growth would dangle every
+    // desc.meshFile below (classic realloc hazard).
+    cs->objects.reserve(cs->meshFiles.size());
+    for (std::size_t k = 0; k < modelIds.size(); ++k) {
+        const auto* model = cs->world.getComponent<nl::scene::ModelComponent>(modelIds[k]);
+        const auto* t = cs->world.getComponent<nl::scene::TransformComponent>(modelIds[k]);
+        nl::renderer::SceneObjectDesc d{};
+        if (t) {
+            const auto wm = t->getWorldMatrix();
+            std::memcpy(d.world, wm.m, sizeof(d.world));
+        }
+        d.tint[0]=model->tint.x; d.tint[1]=model->tint.y; d.tint[2]=model->tint.z;
+        d.roughness=model->roughness; d.metallic=model->metallic;
+        d.hasPbrOverride=model->hasPbrOverride;
+        d.meshFile=cs->meshFiles[k].c_str();
+        cs->objects.push_back(d);
+    }
+    {
+        // Player placeholder: identity world, overwritten every frame from the
+        // live chassis pose (see render loop).
+        nl::renderer::SceneObjectDesc d{};
+        d.meshFile = cs->meshFiles.back().c_str();
+        cs->objects.push_back(d);
+        cs->playerObject = kPlayerObjectIndex;
+    }
+    // NOTE: no key-light injection. CG2 is a night city (emissive windows baked
+    // in the facade textures); viewer --traffic-city renders it with ZERO lights
+    // and that is the target look. The earlier "all black" screenshot was the
+    // camera INSIDE a giant slab (pre-spawn-fix), not a lighting problem.
+    cs->ok = true;
+    return true;
+}
+
+// Build Jolt static boxes from the SAME scene JSON building transforms. We read
+// the E1 World JSON entities (Transform + Model) directly: a box entity is one
+// whose mesh is a city_box_tierN.glb and has a non-unit scale[1] (height). The
+// unit box is 1x1x1 centered at origin in the GLB, so world half-extents =
+// |scale|/2 and center = Transform.t + y offset scale[1]/2.
+bool addCityCollision(const Options& o, nl::physics::DebugScene* phys, int* outCount,
+                      float outCenter[3],
+                      std::vector<std::array<float,3>>* outBoxPos,
+                      std::vector<std::array<float,3>>* outBoxHalf,
+                      std::string* err) {
+    std::ifstream f(o.cityScene, std::ios::binary);
+    if (!f) { *err = "cannot reopen scene for collision"; return false; }
+    nlohmann::json doc;
+    try { f >> doc; } catch (...) { *err = "malformed scene json"; return false; }
+    if (!doc.contains("entities") || !doc["entities"].is_array()) {
+        *err = "scene has no entities[]"; return false;
+    }
+    std::vector<std::uint64_t> owners;
+    std::vector<std::array<float,3>> positions, halves;
+    for (const auto& ent : doc["entities"]) {
+        if (!ent.is_object() || !ent.contains("components")) continue;
+        const auto& comps = ent["components"];
+        if (!comps.is_object() || !comps.contains("Model")) continue;
+        const auto& m = comps["Model"];
+        const std::string mesh = m.value("mesh", std::string(""));
+        if (mesh.rfind("city_box_tier", 0) != 0) continue;  // lm_*/cars are not buildings
+        float t[3] = {0,0,0}, s[3] = {1,1,1};
+        if (comps.contains("Transform")) {
+            const auto& tr = comps["Transform"];
+            if (tr.contains("position")) {
+                const auto& v = tr["position"];
+                if (v.is_array() && v.size() >= 3) {
+                    t[0]=v[0].get<float>(); t[1]=v[1].get<float>(); t[2]=v[2].get<float>();
+                }
+            }
+            if (tr.contains("scale")) {
+                const auto& v = tr["scale"];
+                if (v.is_array() && v.size() >= 3) {
+                    s[0]=std::fabs(v[0].get<float>()); s[1]=std::fabs(v[1].get<float>());
+                    s[2]=std::fabs(v[2].get<float>());
+                }
+            }
+        }
+        // CG2 box position is already the CENTER (e.g. West Tower y=220.1 for a
+        // 440.2m height = half). scale is the full extent, so half = scale/2.
+        // Buildings are axis-aligned; rotation is identity in CG2 -> ignored for
+        // collision (documented scope: no rotated facades this milestone).
+        positions.push_back({t[0], t[1], t[2]});
+        halves.push_back({s[0]*0.5f, s[1]*0.5f, s[2]*0.5f});
+        owners.push_back(static_cast<std::uint64_t>(ent.value("id", 0)));
+    }
+    if (positions.empty()) { *err = "no city_box_tier boxes found in scene"; return false; }
+    // CG2 coordinates are km-scale (e.g. West Tower x=-1047). The training-ground
+    // physics world is 80x80m and the chassis spawns at origin, so normalize the
+    // city to its median x/z (same trick as citygen2engine.py) -> city sits around
+    // origin and the streets are reachable. Y is kept (building heights 0..620m).
+    std::vector<float> xs, zs;
+    xs.reserve(positions.size()); zs.reserve(positions.size());
+    for (const auto& p : positions) { xs.push_back(p[0]); zs.push_back(p[2]); }
+    std::sort(xs.begin(), xs.end()); std::sort(zs.begin(), zs.end());
+    const float cx = xs[xs.size()/2], cz = zs[zs.size()/2];
+    if (outCenter) { outCenter[0] = cx; outCenter[1] = 0.0f; outCenter[2] = cz; }
+    for (auto& p : positions) { p[0] -= cx; p[2] -= cz; }
+    // Flatten to C arrays (contiguous float[3] rows) for the core API.
+    std::vector<float> flatP(positions.size()*3), flatH(positions.size()*3);
+    for (std::size_t i = 0; i < positions.size(); ++i) {
+        for (int k = 0; k < 3; ++k) {
+            flatP[i*3+k] = positions[i][k];
+            flatH[i*3+k] = std::max(halves[i][k], 0.05f);
+        }
+    }
+    const int added = phys->addCityBoxes(
+        reinterpret_cast<const float(*)[3]>(flatP.data()),
+        reinterpret_cast<const float(*)[3]>(flatH.data()),
+        owners.data(), static_cast<int>(positions.size()),
+        nl::physics::layers::kDefault);
+    if (outBoxPos)  *outBoxPos  = positions;   // shifted (median-centered)
+    if (outBoxHalf) *outBoxHalf = halves;
+    *outCount = added;
+    return added > 0;
+}
+
+// ---- Feedback state: audio source + shake + structured event log ----
+struct Feedback {
+    std::unique_ptr<nl::audio::AudioWorld> audio;
+    nl::core::CameraTrauma trauma;
+    std::uint32_t hitSource = 0;
+    int audioReady = 0;
+    int hits = 0;
+    std::uint64_t lastOwner = 0;
+    float lastStrength = 0.0f;
+    float lastPos[3] = {0,0,0};
+
+    void init(bool realtime) {
+        // Default offline (no audio device needed): deterministic, headless-safe.
+        // createSource still decodes the WAV and yields a real source id, so the
+        // feedback chain is verifiable without a playback device. --audio-realtime
+        // opts into the default device for a human playable session.
+        nl::audio::AudioConfig cfg; cfg.offline = !realtime; cfg.spatialization = false;
+        audio = std::make_unique<nl::audio::AudioWorld>(cfg);
+        if (!audio->ok()) return;
+        std::string err;
+        hitSource = audio->createSource("assets/audio/test-tone.wav", &err);
+        audioReady = hitSource ? 1 : 0;
+    }
+    void onImpact(const nl::physics::ImpactState& s) {
+        ++hits;
+        lastOwner = s.owner; lastStrength = s.strength;
+        lastPos[0]=s.pos[0]; lastPos[1]=s.pos[1]; lastPos[2]=s.pos[2];
+        // Shake amplitude scales with impact strength, capped at 1.
+        trauma.addTrauma(std::min(1.0f, 0.15f + s.strength * 0.05f));
+        if (audioReady && hitSource && audio) {
+            std::string err;
+            audio->stopSource(hitSource, &err);
+            audio->startSource(hitSource, &err);
+        }
+        std::printf("GAME_IMPACT frame_hits=%d owner=%llu strength=%.4f impulse=%.4f pos=(%.2f,%.2f,%.2f)\n",
+                    hits, (unsigned long long)lastOwner, lastStrength, s.impulse,
+                    lastPos[0], lastPos[1], lastPos[2]);
+    }
+};
+
+int runGame(const Options& o) {
+    // Resolve scene path.
+    Options resolved = o;
+    resolved.cityScene = (std::filesystem::path(o.city) / "city.scene.engine").generic_string();
+    {
+        std::error_code ec;
+        if (!std::filesystem::is_regular_file(resolved.cityScene, ec) || ec) {
+            std::printf("game: scene not found: %s\n", resolved.cityScene.c_str());
+            return 2;
+        }
+    }
+
+    // 1) Load city scene (render + ECS world).
+    CityScene city;
+    std::string err;
+    if (!loadCity(resolved, &city, &err)) {
+        std::printf("game: loadCity failed: %s\n", err.c_str());
+        return 1;
+    }
+    std::printf("game: city loaded: %zu objects, %zu lights, ambient %.2f\n",
+                city.objects.size(), city.lights.size(), city.ambient);
+
+    // 2) Physics scene (scenario 2 driving ground) + city static boxes.
+    //    Built AFTER the renderer in the final layout; see below. Declared here
+    //    only so lambdas can capture it.
+    nl::physics::DebugScene phys;
+    int boxes = 0;
+    float cityCenter[3] = {0,0,0};
+    std::vector<std::array<float,3>> boxPos, boxHalf;
+
+    // 3) Feedback object created here but audio device initialized AFTER the
+    //    renderer (see below): miniaudio touches COM/device state and must not
+    //    precede D3D12 device creation on this machine (Intel driver crash).
+    Feedback fb;
+
+    // 4) Camera director (Chase, fed by chassisState each logic tick).
+    nl::core::CameraDirector camera;
+    camera.setMode(nl::core::CameraDirector::Mode::Chase);
+    camera.setAspect(float(resolved.width) / float(resolved.height));
+    camera.setFovYDegrees(60.0f);
+    camera.setFarZ(4000.0f);
+    camera.chase().setDistance(12.0f);      // default 6m clips the player glb
+    camera.chase().setHeightOffset(3.0f);   // raise the boom: see over tier1 roofs
+    camera.chase().setPitchDegrees(-14.0f); // slight downward: skyline in frame
+
+    // 5) Window + renderer (sceneMode, like viewer runScene).
+    nl::core::WindowDesc wd;
+    wd.width = resolved.width; wd.height = resolved.height;
+    wd.title = "nl-engine game | city drive";
+    wd.visible = !resolved.screenshot.empty();
+    nl::core::Window window(wd);
+    if (!window.valid()) { std::printf("game: window creation failed\n"); return 1; }
+    const auto native = window.framebufferSize();
+    const nl::renderer::Extent extent{static_cast<std::uint32_t>(native.width),
+                                      static_cast<std::uint32_t>(native.height)};
+    auto renderer = nl::renderer::Renderer::create(
+        window.nativeHandle(), extent, false, nullptr,
+        false, false, false, false, false, false,
+        /*sceneMode=*/true, false, false, false, false, false, false, false, false, false, false,
+        false);
+    if (!renderer || !renderer->valid()) {
+        std::printf("game: renderer init failed: %s\n",
+                    renderer ? renderer->lastError().c_str() : "null");
+        return 1;
+    }
+    if (!renderer->loadEcsScene(city.objects.data(),
+                                static_cast<std::uint32_t>(city.objects.size()),
+                                city.lights.empty() ? nullptr : city.lights.data(),
+                                static_cast<std::uint32_t>(city.lights.size()),
+                                city.ambient, "city.scene.engine")) {
+        std::printf("game: loadEcsScene failed: %s\n", renderer->lastError().c_str());
+        return 1;
+    }
+
+    // 3b) Initialize audio feedback only AFTER the D3D12 device exists.
+    fb.init(resolved.audioRealtime);
+    std::printf("game: feedback ready: audio=%s\n", fb.audioReady ? "on" : "off (graceful)");
+
+    // 2b) Build physics AFTER the D3D12 device exists (Jolt bootstrap must not
+    //     precede nvrhi device init on this Intel driver -- see cdb stack).
+    {
+        if (!phys.build(2, resolved.seed, &err)) {
+            std::printf("game: physics build failed: %s\n", err.c_str());
+            return 1;
+        }
+        if (!addCityCollision(resolved, &phys, &boxes, cityCenter, &boxPos, &boxHalf, &err)) {
+            std::printf("game: addCityCollision failed: %s\n", err.c_str());
+            return 1;
+        }
+        // Shift render objects by the same -center so visuals line up with physics.
+        // Mat4 column-major: translation at m[12], m[13], m[14]. Render objects
+        // were already uploaded by loadEcsScene above, so re-upload after shift.
+        for (auto& d : city.objects) {
+            d.world[12] -= cityCenter[0];
+            d.world[13] -= cityCenter[1];
+            d.world[14] -= cityCenter[2];
+        }
+        if (!renderer->updateEcsObjects(city.objects.data(),
+                                        static_cast<std::uint32_t>(city.objects.size()))) {
+            std::printf("game: updateEcsObjects (post-shift) failed: %s\n",
+                        renderer->lastError().c_str());
+            return 1;
+        }
+        // Spawn the player chassis on a street, NOT inside a building: CG2 has
+        // huge OSM slabs (200m-wide malls) that swallow the median origin, and
+        // a chassis spawned in overlap jams at speed 0. Scan candidates outward
+        // from the city center until clear of every box (2D xz, 3m margin).
+        float spawn[3] = {0.0f, 0.6f, 0.0f};
+        const float cand[16][2] = {
+            {0,0}, {0,10}, {0,-10}, {10,0}, {-10,0}, {0,20}, {0,-20},
+            {20,0}, {-20,0}, {0,35}, {0,-35}, {35,0}, {-35,0},
+            {0,50}, {50,0}, {-50,0}};
+        for (const auto& c : cand) {
+            bool free = true;
+            for (std::size_t i = 0; i < boxPos.size() && free; ++i) {
+                const float hx = std::max(boxHalf[i][0], 0.0f) + 3.0f;
+                const float hz = std::max(boxHalf[i][2], 0.0f) + 3.0f;
+                if (std::fabs(c[0] - boxPos[i][0]) <= hx &&
+                    std::fabs(c[1] - boxPos[i][2]) <= hz) free = false;
+            }
+            if (free) { spawn[0] = c[0]; spawn[2] = c[1]; break; }
+        }
+        const float p[3] = {spawn[0], 0.6f, spawn[2]};
+        const float q[4] = {0.0f, 0.0f, 0.0f, 1.0f};
+        phys.teleportVehicle(0, p, q);
+        std::printf("game: physics ready: %d city collision boxes, chassis spawn (%.1f, %.1f)\n",
+                    boxes, spawn[0], spawn[2]);
+    }
+
+    // 6) GameClock + TickScheduler: 4 groups, deterministic order.
+    nl::core::GameClock clock;
+    nl::core::TickScheduler& sched = clock.scheduler();
+    int logicFrame = 0;
+    bool lastImpactHit = false;
+    nl::physics::DriveChassisState latestChassis{};   // read by the render loop
+    sched.set(nl::core::TickGroup::PrePhysics, [&](double, std::uint64_t) {
+        const auto in = scriptInput(logicFrame);
+        phys.setDriveInput(in);
+    });
+    sched.set(nl::core::TickGroup::Physics, [&](double dt, std::uint64_t) {
+        phys.step(dt);
+    });
+    sched.set(nl::core::TickGroup::PostPhysics, [&](double, std::uint64_t) {
+        const nl::physics::ImpactState s = phys.impactState();
+        if (s.hit && (!lastImpactHit || s.hits > fb.hits)) fb.onImpact(s);
+        lastImpactHit = s.hit;
+        // Feed chase camera with the live chassis state.
+        const nl::physics::DriveChassisState d = phys.chassisState();
+        nl::core::ChassisState cs{};
+        if (d.valid) {
+            cs.pos[0]=d.pos[0]; cs.pos[1]=d.pos[1]; cs.pos[2]=d.pos[2];
+            cs.yawDegrees=d.yawDegrees;
+            cs.vel[0]=d.vel[0]; cs.vel[1]=d.vel[1]; cs.vel[2]=d.vel[2];
+            cs.valid=true;
+        }
+        nl::core::DirectorInputs di{};
+        di.chassis = cs.valid ? &cs : nullptr;
+        camera.update(static_cast<float>(nl::core::GameClock::kStep), di);
+        latestChassis = d;
+        ++logicFrame;
+    });
+    sched.set(nl::core::TickGroup::PostUpdateWork, [&](double dt, std::uint64_t) {
+        fb.trauma.step(static_cast<float>(dt));
+    });
+
+    // 7) Render loop: fixed clock steps per rendered frame (screenshot replay path).
+    const int stepsPerFrame = std::max(1, resolved.steps / resolved.frames);
+    int rendered = 0;
+    std::string shot;
+    for (; rendered < resolved.frames && !window.shouldClose(); ++rendered) {
+        window.pollEvents();
+        // Advance the fixed-step clock for this rendered frame.
+        for (int s = 0; s < stepsPerFrame && logicFrame < resolved.steps; ++s)
+            clock.tick(nl::core::GameClock::kStep * 1000.0);
+        // Shake offsets apply to the view (deterministic, no wall-clock).
+        float sy=0, sp=0, sr=0;
+        fb.trauma.offsets(sy, sp, sr);
+        // Player car mesh follows the live chassis pose (column-major Mat4:
+        // rotation about Y, translation m[12..14]; physics and render share the
+        // same median-shifted space so no extra offset).
+        if (city.playerObject >= 0 && city.playerObject < static_cast<int>(city.objects.size())
+            && latestChassis.valid) {
+            const float yawRad = latestChassis.yawDegrees * 3.14159265358979f / 180.0f;
+            const float cy2 = std::cos(yawRad), sy2 = std::sin(yawRad);
+            float* w = city.objects[static_cast<std::size_t>(city.playerObject)].world;
+            w[0]=cy2;  w[1]=0;  w[2]=-sy2; w[3]=0;
+            w[4]=0;    w[5]=1;  w[6]=0;   w[7]=0;
+            w[8]=sy2;  w[9]=0;  w[10]=cy2; w[11]=0;
+            w[12]=latestChassis.pos[0]; w[13]=latestChassis.pos[1]; w[14]=latestChassis.pos[2];
+            w[15]=1;
+            if (!renderer->updateEcsObjects(city.objects.data(),
+                                            static_cast<std::uint32_t>(city.objects.size()))) {
+                std::printf("game: updateEcsObjects (player car) failed\n");
+                return 1;
+            }
+        }
+        auto vp = camera.viewProjection();
+        nl::renderer::FrameParams fp{};
+        std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));
+        std::memcpy(fp.model, vp.m, sizeof(fp.model));
+        fp.cullBack = true;
+        fp.shading = 0;        // textured (ECS scene GLBs carry baked facade tiers)
+        nl::renderer::HudFrame hud{};
+        hud.backend = "game";
+        hud.panelShow = !resolved.noHud;
+        hud.deterministic = true;
+        char modeTag[64];
+        std::snprintf(modeTag, sizeof(modeTag), "city | hits=%d", fb.hits);
+        hud.mode = modeTag;
+        shot = resolved.screenshot;
+        const int shotAt = resolved.screenshotFrame >= 0
+                               ? resolved.screenshotFrame : resolved.frames - 1;
+        if (!shot.empty() && rendered == shotAt) {
+            // final frame writes screenshot
+            if (!renderer->renderFrame({0.05f,0.07f,0.11f,1.0f}, fp, shot.c_str(),
+                                       resolved.noHud ? nullptr : &hud)) {
+                std::printf("game: renderFrame failed: %s\n", renderer->lastError().c_str());
+                return 1;
+            }
+        } else {
+            if (!renderer->renderFrame({0.05f,0.07f,0.11f,1.0f}, fp, nullptr,
+                                       resolved.noHud ? nullptr : &hud)) {
+                std::printf("game: renderFrame failed: %s\n", renderer->lastError().c_str());
+                return 1;
+            }
+        }
+        renderer->drainMessages();
+    }
+
+    const auto ds = phys.driveState();
+    std::printf("game-m0: frames=%d steps=%d objects=%zu boxes=%d hits=%d "
+                "speed=%.3f odometer_pos=(%.2f,%.2f,%.2f) shake=%.4f\n",
+                rendered, logicFrame, city.objects.size(), boxes, fb.hits,
+                ds.valid ? ds.speed : 0.0f,
+                ds.valid ? ds.pos[0] : 0.0f, ds.valid ? ds.pos[1] : 0.0f,
+                ds.valid ? ds.pos[2] : 0.0f, fb.trauma.trauma01());
+    if (!shot.empty()) std::printf("game: screenshot written: %s\n", shot.c_str());
+    return 0;
+}
+
+} // namespace
+
+int main(int argc, char** argv) {
+    // M-CRASH0: process-level crash handler, installed first (viewer parity).
+    nl::crash::install();
+    Options o;
+    const int pr = parseArgs(argc, argv, &o);
+    if (pr != 0) return pr;
+    if (o.selftest) {
+        g_fail = 0;
+        return runSelftest(o.verbose);
+    }
+    return runGame(o);
+}
