@@ -166,6 +166,8 @@
 
 ## 8. 后置挂账（范围外，不是本轮待拍板项）
 
+> **2026-11-16 勘误**：本节原列的前两项 M-PQ1 / M-SP1 **已收官并 merge**（tag `phys-query-pq1` / `m-sp1`，详见 MILESTONES.md），不再是挂账；`ui-rmlui` 遗留目录亦已由别轨清掉；波 1 两 tag 已在本地补打。下方保留立项当时的原始清单作历史记录，勿按「未完成」解读。
+
 M-PQ1（查询接 live `DebugScene`）、M-SP1（`--sprite-demo` / PNG 基线 / 多图集每桶换 binding set /
 RmlUi element+scissor 桥接）、Animation 驱动真实蒙皮与 ECS 动画组件、Audio 全量 API、
 三游戏开发顺序与 citygen 库化、广州地图范围、浮字方案、NPC 行人路网归属、
