@@ -71,3 +71,21 @@ Overpass `[out:json]` 数据 → 区域(珠江新城一带 2~3km)真实路网 + 
   不静默。
 - city-tools 与 citygen 的俯视 PNG 绘制逻辑重复:第一版允许各自实现(数据源形态不同);
   M-CG1 迁程序化输入时再评估抽公共绘制层,不过早抽象。
+
+## 7. 后续挂账 — M-CG1 地标混合架构(2026-11-16 用户拍板「写吧」)
+
+**方案:citygen 程序化打底 + max 场景只抠地标单体**,替代原「真轮廓挤出」条目。
+用户确认形态:「部分标志建筑用 max 的,其他自己生成」。
+
+| 项 | 内容 |
+|---|---|
+| 架构 | citygen 全量 box 打底(CG0 产物不变) + 地标单体 glb 增量叠加;`landmark_whitelist.json`(osm id → glb 路径)命中 → 该 footprint 跳过 box 实体、产真模型实体(label 契约照 A 档扩 `mesh` 字段,只加不减) |
+| 源资产 | `E:/canton_work/`(canton_tower_scene.max 1.19GB / canton_cleaned.max / canton_fbx/canton_scene.fbx 570MB / tex 806 张 / MAXScript 全套);**3ds Max 2027 本机在装** |
+| 抠模 | MAXScript 按 bbox/名字选节点逐地标导出 FBX(改 `export_fbx.ms`);场景 20808 几何体中 18804 是 Missing_GeomObject 死代理,有效网格约 2000,只取目标地标 |
+| 转换 | FBX→glb(FBX2glTF 或 Blender);**inch→米、Z-up→Y-up 修正**;按 M-W1 白名单路线裁剪,不整场景进引擎 |
+| 首个地标 | **广州塔**(23.1066N,113.3246E,在 CG0 bbox 南界外)——**零抑制逻辑直接加**;bbox 内地标(西塔/东塔)才需 whitelist 抑制 |
+| 对位 | 场景内定真实坐标锚点(塔底)→ inch/Z-up → citygen 局部米制(`dx=Δlng·cos(23.1°)·111320`);每地标独立锚 footprint 中心,错只错一个 |
+| 验收 | 广州塔 glb 挂进 city.scene + 俯视 PNG 地标位金色标记 + 引擎侧 `--traffic-city` 场景可见(消费端接线时) |
+
+贴图注记(2026-11-16 排查):OSM 数据无图像(436 栋仅 2 条 `building:material`);引擎材质入口
+现成;程序化 facade 纹理(窗格/楼层条纹)归 M-CG1 一并评估;真实照片贴图无源且版权不可用。
