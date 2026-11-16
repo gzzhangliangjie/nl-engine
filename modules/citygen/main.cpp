@@ -7,10 +7,14 @@
 //   (M-CG0.1 convert → roadnet.json;M-CG0.2 俯视 PNG / city.scene)
 #include "citygen/osm.hpp"
 #include "citygen/roadnet.hpp"
+#include "citygen/buildings.hpp"
+#include "citygen/topview.hpp"
+#include "citygen/scene.hpp"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -24,8 +28,13 @@ int usage() {
         "usage:\n"
         "  citygen selftest\n"
         "  citygen stats --input <overpass.json> [--bbox south,west,north,east]\n"
+        "  citygen buildings --input <overpass.json> [--bbox south,west,north,east]\n"
         "  citygen convert --input <overpass.json> --bbox south,west,north,east\n"
-        "                  --out <roadnet.json>\n");
+        "                  --out <roadnet.json>\n"
+        "  citygen export --input <osm.json> --buildings <osm-bld.json>\n"
+        "                 --bbox south,west,north,east --out <dir>\n"
+        "                 (产出 roadnet.json / city.scene / buildings/box.obj /\n"
+        "                  top.png / ODbL-attribution.txt)\n");
     return 2;
 }
 
@@ -36,6 +45,16 @@ bool readTextFile(const char* path, std::string& out) {
     ss << f.rdbuf();
     out = ss.str();
     return true;
+}
+
+// 内容未变则跳过(mtime 不动,便于产物目录做逐字节回归锚)。
+bool writeFileIfChangedOrNew(const std::string& path, const std::string& data) {
+    std::string old;
+    if (readTextFile(path.c_str(), old) && old == data) return true;
+    std::ofstream f(path, std::ios::binary);
+    if (!f) return false;
+    f.write(data.data(), static_cast<std::streamsize>(data.size()));
+    return static_cast<bool>(f);
 }
 
 bool parseBBox(const char* arg, citygen::BBox& box) {
@@ -159,7 +178,65 @@ int selftest() {
         (void)nodeCnt;
     }
 
-    std::printf("citygen selftest: PASS (7 groups, mini overpass sample)\n");
+    // ⑧ buildings/scene/topview(M-CG0.2):height 标签 > levels 折算 > 缺省;
+    //   退化 footprint 丢弃计数;块外接盒正;PNG 头锚。
+    const char* kBld = R"JSON({"version": 0.6, "elements": [
+      {"type": "way", "id": 10,
+       "geometry": [{"lat": 23.1100, "lon": 113.3200}, {"lat": 23.1120, "lon": 113.3200},
+                    {"lat": 23.1120, "lon": 113.3230}, {"lat": 23.1100, "lon": 113.3230}],
+       "tags": {"building": "yes", "building:levels": "5", "name": "楼"}},
+      {"type": "way", "id": 11,
+       "geometry": [{"lat": 23.1140, "lon": 113.3260}, {"lat": 23.1155, "lon": 113.3260},
+                    {"lat": 23.1155, "lon": 113.3280}],
+       "tags": {"building": "commercial", "height": "42 m"}},
+      {"type": "way", "id": 12,
+       "geometry": [{"lat": 23.1120, "lon": 113.3220}]},
+      {"type": "way", "id": 13,
+       "geometry": [{"lat": 23.1160, "lon": 113.3300}, {"lat": 23.1162, "lon": 113.3300}],
+       "tags": {"building": "yes"}}]})JSON";
+    OsmData bd = parseOverpassJson(kBld);
+    BuildingStats bs;
+    std::vector<Building> blds = extractBuildings(bd, &bs);
+    std::fprintf(stderr, "S8 buildings=%zu tag=%zu lv=%zu def=%zu drop=%zu\n",
+                 blds.size(), bs.heightFromTag, bs.heightFromLevels,
+                 bs.heightDefault, bs.droppedNoPoly);
+    CHECK(blds.size() == 2);              // way 13(2 点) 丢弃;way 12 无 building 标签不进统计
+    CHECK(bs.droppedNoPoly == 1);
+    CHECK(blds[0].heightSrc == 2 && blds[0].heightM > 14.9 && blds[0].heightM < 15.1);
+    CHECK(blds[1].heightSrc == 1 && blds[1].heightM > 41.9 && blds[1].heightM < 42.1);
+    BlockBox bb;
+    CHECK(buildingBlockBox(blds[0], zjx, bb));
+    CHECK(bb.wx > 0.0 && bb.wz > 0.0);
+    std::string scene = serializeCityScene(blds, zjx, "buildings/box.obj");
+    CHECK(scene.find("\"nextID\": 3") != std::string::npos);
+    CHECK(scene.find("bld_10") != std::string::npos);
+    CHECK(scene.find("\"buildings/box.obj\"") != std::string::npos);
+    // A 档:OSM name → 实体级 label(先 label 后 components;entity 对象内)。
+    {
+        const std::size_t lab = scene.find("\"label\": ");
+        CHECK(lab != std::string::npos);
+        CHECK(scene.find("\"components\"", lab) != std::string::npos);
+        CHECK(scene.rfind("\"components\"", lab) ==
+              std::string::npos);  // label 在实体级,其前无 components
+    }
+    CHECK(unitBoxObj().find("f 1//1 2//1 3//1") != std::string::npos);
+    {
+        TopViewConfig tvc;
+        tvc.targetWidth = 256;
+        std::vector<std::uint8_t> png;
+        int pw = 0, ph = 0;
+        TopViewStats tvs;
+        CHECK(renderTopView(n2, blds, zjx, tvc, png, pw, ph, &tvs));
+        std::fprintf(stderr, "S8 png %dx%d bytes=%zu bldPx=%zu roadPx=%zu\n",
+                     pw, ph, png.size(), tvs.buildingPixels, tvs.roadPixels);
+        CHECK(pw == 256 && ph > 0 && ph <= 16384);
+        CHECK(png.size() > 8);
+        CHECK(png[0] == 0x89 && png[1] == 'P' && png[2] == 'N' && png[3] == 'G');
+        CHECK(tvs.buildingPixels > 0);   // 内容锚:建筑真的画进画布
+        CHECK(tvs.roadPixels > 0);
+    }
+
+    std::printf("citygen selftest: PASS (8 groups, mini overpass sample)\n");
     std::fflush(stdout);
     return 0;
 }
@@ -270,12 +347,154 @@ int cmdConvert(int argc, char** argv) {
     return 0;
 }
 
+// ---- buildings(M-CG0.2):建筑提取统计锚 ----
+int cmdBuildings(int argc, char** argv) {
+    using namespace citygen;
+    const char* input = nullptr;
+    bool haveBox = false;
+    citygen::BBox box;
+    for (int i = 2; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--input") && i + 1 < argc) {
+            input = argv[++i];
+        } else if (!std::strcmp(argv[i], "--bbox") && i + 1 < argc) {
+            if (!parseBBox(argv[++i], box)) {
+                std::fprintf(stderr, "citygen: bad --bbox (want south,west,north,east)\n");
+                return 2;
+            }
+            haveBox = true;
+        } else {
+            std::fprintf(stderr, "citygen buildings: unknown arg '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+    if (!input) return usage();
+    std::string text;
+    if (!readTextFile(input, text)) {
+        std::fprintf(stderr, "citygen: cannot read '%s'\n", input);
+        return 2;
+    }
+    try {
+        citygen::OsmData d = parseOverpassJson(text);
+        if (haveBox) d = filterBBox(d, box);
+        BuildingStats bs;
+        std::vector<Building> blds = extractBuildings(d, &bs);
+        std::printf("buildings=%zu heightFromTag=%zu heightFromLevels=%zu "
+                    "heightDefault=%zu droppedNoPoly=%zu\n",
+                    blds.size(), bs.heightFromTag, bs.heightFromLevels,
+                    bs.heightDefault, bs.droppedNoPoly);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "citygen: parse error: %s\n", e.what());
+        return 2;
+    }
+    return 0;
+}
+
+// ---- export(M-CG0.2):一次产 roadnet.json / city.scene / box.obj / top.png ----
+int cmdExport(int argc, char** argv) {
+    using namespace citygen;
+    const char* input = nullptr;
+    const char* bldInput = nullptr;
+    const char* outDir = nullptr;
+    bool haveBox = false;
+    citygen::BBox box;
+    for (int i = 2; i < argc; ++i) {
+        if (!std::strcmp(argv[i], "--input") && i + 1 < argc) {
+            input = argv[++i];
+        } else if (!std::strcmp(argv[i], "--buildings") && i + 1 < argc) {
+            bldInput = argv[++i];
+        } else if (!std::strcmp(argv[i], "--bbox") && i + 1 < argc) {
+            if (!parseBBox(argv[++i], box)) {
+                std::fprintf(stderr, "citygen: bad --bbox (want south,west,north,east)\n");
+                return 2;
+            }
+            haveBox = true;
+        } else if (!std::strcmp(argv[i], "--out") && i + 1 < argc) {
+            outDir = argv[++i];
+        } else {
+            std::fprintf(stderr, "citygen export: unknown arg '%s'\n", argv[i]);
+            return 2;
+        }
+    }
+    if (!input || !bldInput || !outDir || !haveBox) return usage();
+
+    std::string roadText, bldText;
+    if (!readTextFile(input, roadText)) {
+        std::fprintf(stderr, "citygen: cannot read '%s'\n", input);
+        return 2;
+    }
+    if (!readTextFile(bldInput, bldText)) {
+        std::fprintf(stderr, "citygen: cannot read '%s'\n", bldInput);
+        return 2;
+    }
+    try {
+        std::filesystem::create_directories(outDir);
+        std::filesystem::create_directories(
+            std::filesystem::path(outDir) / "buildings");
+        OsmData d = parseOverpassJson(roadText);
+        const std::size_t totalWays = d.ways.size();
+        d = filterBBox(d, box);
+        RoadnetBuildStats rs;
+        Roadnet net = buildRoadnetFromOsm(d, box, &rs);
+        const std::string roadnetText = serializeRoadnet(net);
+        writeFileIfChangedOrNew((std::filesystem::path(outDir) / "roadnet.json").string(),
+                                roadnetText);
+
+        OsmData b = parseOverpassJson(bldText);
+        if (!b.ways.empty() || bldText.size() > 64) b = filterBBox(b, box);
+        BuildingStats bs;
+        std::vector<Building> blds = extractBuildings(b, &bs);
+        const std::string sceneText = serializeCityScene(blds, box, "buildings/box.obj");
+        writeFileIfChangedOrNew((std::filesystem::path(outDir) / "city.scene").string(),
+                                sceneText);
+        writeFileIfChangedOrNew((std::filesystem::path(outDir) / "buildings" / "box.obj").string(),
+                                unitBoxObj());
+
+        TopViewConfig tvc;
+        std::vector<std::uint8_t> png;
+        int pw = 0, ph = 0;
+        TopViewStats tvs;
+        if (!renderTopView(net, blds, box, tvc, png, pw, ph, &tvs)) {
+            std::fprintf(stderr, "citygen: top view render failed\n");
+            return 1;
+        }
+        {
+            std::ofstream f(std::filesystem::path(outDir) / "top.png",
+                            std::ios::binary);
+            f.write(reinterpret_cast<const char*>(png.data()),
+                    static_cast<std::streamsize>(png.size()));
+            if (!f) {
+                std::fprintf(stderr, "citygen: write top.png failed\n");
+                return 2;
+            }
+        }
+        // ODbL 署名注记随产物落盘(CG0-PLAN §3 / S-PLAN §3)。
+        writeFileIfChangedOrNew(
+            (std::filesystem::path(outDir) / "ODbL-attribution.txt").string(),
+            "Source: OpenStreetMap data via Overpass API (c) OpenStreetMap contributors, ODbL 1.0.\n"
+            "Derived products in this directory must carry this attribution when distributed.\n");
+
+        std::printf("nodes=%zu edges=%zu buildings=%zu\n"
+                    "png=%dx%d bytes=%zu bldPx=%zu roadPx=%zu roadnet=%zu scene=%zu\n"
+                    "wrote %s\n",
+                    net.nodes.size(), net.edges.size(), blds.size(),
+                    pw, ph, png.size(), tvs.buildingPixels, tvs.roadPixels,
+                    roadnetText.size(), sceneText.size(),
+                    outDir);
+    } catch (const std::exception& e) {
+        std::fprintf(stderr, "citygen: export error: %s\n", e.what());
+        return 2;
+    }
+    return 0;
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
     if (argc < 2) return usage();
     if (!std::strcmp(argv[1], "selftest")) return selftest();
     if (!std::strcmp(argv[1], "stats")) return cmdStats(argc, argv);
+    if (!std::strcmp(argv[1], "buildings")) return cmdBuildings(argc, argv);
     if (!std::strcmp(argv[1], "convert")) return cmdConvert(argc, argv);
+    if (!std::strcmp(argv[1], "export")) return cmdExport(argc, argv);
     return usage();
 }

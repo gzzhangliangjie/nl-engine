@@ -6,10 +6,14 @@
 # nlohmann 类型不进公开头（选型闸第 5 条隔离）。
 add_library(citygen_core STATIC
     src/osm.cpp
-    src/roadnet.cpp)
+    src/roadnet.cpp
+    src/buildings.cpp
+    src/topview.cpp
+    src/scene.cpp)
 target_include_directories(citygen_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
-    ${THIRDPARTY})  # <nlohmann/json.hpp> → thirdparty/nlohmann/json.hpp
+    ${THIRDPARTY}
+    ${THIRDPARTY}/stb)  # <stb_image_write.h> → thirdparty/stb/(M-W0 已 vendored)
 target_compile_features(citygen_core PUBLIC cxx_std_17)
 
 add_executable(citygen main.cpp)
@@ -47,3 +51,21 @@ add_test(NAME cg0-convert
 set_tests_properties(cg0-convert PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
     PASS_REGULAR_EXPRESSION "nodes=[0-9]+ edges=[0-9]+")
+
+# ---- M-CG0.2：建筑提取统计锚（样本自 zjx-buildings.json 裁剪，gen_fixture.py）----
+add_test(NAME cg0-buildings
+    COMMAND citygen buildings --input ${CMAKE_CURRENT_SOURCE_DIR}/test/zjx-buildings-sample.json)
+set_tests_properties(cg0-buildings PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
+    PASS_REGULAR_EXPRESSION "buildings=[0-9]+ heightFromTag=[0-9]+ heightFromLevels=[0-9]+")
+
+# ---- M-CG0.2：export 全产物（roadnet/city.scene/box.obj/top.png/ODbL 注记）----
+add_test(NAME cg0-export
+    COMMAND citygen export
+            --input ${CMAKE_CURRENT_SOURCE_DIR}/test/zjx-sample.json
+            --buildings ${CMAKE_CURRENT_SOURCE_DIR}/test/zjx-buildings-sample.json
+            --bbox 23.108,113.316,23.130,113.342
+            --out ${CMAKE_CURRENT_SOURCE_DIR}/test/out-cg0)
+set_tests_properties(cg0-export PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
+    PASS_REGULAR_EXPRESSION "png=[0-9]+x[0-9]+ bytes=[0-9]+")

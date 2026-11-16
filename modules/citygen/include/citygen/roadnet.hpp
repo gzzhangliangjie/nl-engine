@@ -34,6 +34,9 @@ struct RoadnetEdge {
     double width = 3.0;            // 车行道总宽 m(类别映射)
     std::string osmName;           // OSM 版新增字段(只加不减)
     std::string cls;               // highway 类别原文
+    // 内存态形状点(局部米,含 from/to 端点,方向 = from→to);不进 roadnet.json
+    // (契约 v1 只加不减,俯视 PNG 绘制消费)。相邻节点间的 way 中间形状点。
+    std::vector<std::pair<double, double>> shape;
 };
 
 struct Roadnet {

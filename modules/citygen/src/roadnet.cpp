@@ -162,18 +162,28 @@ Roadnet buildRoadnetFromOsm(const OsmData& data, const BBox& box,
         const bool oneWayRev = (w.tags.count("oneway") && w.tags.at("oneway") == "-1");
         const std::string name =
             (w.tags.count("name") ? w.tags.at("name") : std::string{});
-        // 沿 way 找节点序列
-        std::vector<std::uint32_t> path;
+        // 沿 way 找节点序列(带索引,切边时收集中间形状点)。
+        std::vector<std::pair<std::uint32_t, std::size_t>> path;  // (nodeId, ptIdx)
         for (std::size_t i = 0; i < w.pts.size(); ++i) {
             const PointKey k{w.pts[i].first, w.pts[i].second};
             const bool isEnd = (i == 0 || i + 1 == w.pts.size());
-            if (isEnd || wayCount[k] >= 2) path.push_back(ensureNode(k));
+            if (isEnd || wayCount[k] >= 2)
+                path.emplace_back(ensureNode(k), i);
         }
         if (path.size() < 2) { ++st.droppedDegenerate; continue; }
+        auto shapeSlice = [&](std::size_t ia, std::size_t ib) {
+            // way 点 [ia..ib] → 局部米(from→to 方向)。
+            std::vector<std::pair<double, double>> pts;
+            pts.reserve(ib - ia + 1);
+            for (std::size_t i = ia; i <= ib; ++i)
+                pts.emplace_back(toLocalMeters(box, w.pts[i].first, w.pts[i].second));
+            return pts;
+        };
         const bool fwd = !oneWayRev;
         const bool rev = !oneWayFwd;
         for (std::size_t i = 0; i + 1 < path.size(); ++i) {
-            const std::uint32_t a = path[i], b = path[i + 1];
+            const std::uint32_t a = path[i].first, b = path[i + 1].first;
+            const std::size_t ia = path[i].second, ib = path[i + 1].second;
             if (a == b) continue;
             if (fwd) {
                 RoadnetEdge e;
@@ -181,6 +191,7 @@ Roadnet buildRoadnetFromOsm(const OsmData& data, const BBox& box,
                 e.from = a; e.to = b;
                 e.lanesPerDir = lanes; e.speedLimit = sp; e.width = wd;
                 e.osmName = name; e.cls = cls;
+                e.shape = shapeSlice(ia, ib);
                 net.edges.push_back(e);
             }
             if (rev) {
@@ -189,6 +200,9 @@ Roadnet buildRoadnetFromOsm(const OsmData& data, const BBox& box,
                 e.from = b; e.to = a;
                 e.lanesPerDir = lanes; e.speedLimit = sp; e.width = wd;
                 e.osmName = name; e.cls = cls;
+                // 反向形状点 = 正向切片反转。
+                e.shape = shapeSlice(ia, ib);
+                std::reverse(e.shape.begin(), e.shape.end());
                 net.edges.push_back(e);
             }
         }

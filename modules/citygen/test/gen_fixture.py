@@ -28,3 +28,21 @@ out = {'version': 0.6, 'generator': 'citygen gen_fixture.py (subset of tile-3-2,
 with open(__file__.rsplit('\\', 1)[0] + '/zjx-sample.json', 'w', encoding='utf-8', newline='\n') as f:
     json.dump(out, f, ensure_ascii=False, indent=1, separators=(',', ': '))
 print('ways:', len(sel), 'bytes:', len(json.dumps(out, ensure_ascii=False)))
+
+# ---- M-CG0.2:建筑样本(源 = Overpass mail.ru 镜像 2026-11-16 实拉
+# assets/osm/zjx-buildings.json,436 栋珠江新城 building ways,ODbL;
+# assets/osm/ 不进 git,本脚本留档可复现)----
+BLD_SRC = 'E:/UE_STUDY_2026/nl-engine-citygen/assets/osm/zjx-buildings.json'
+bd = json.load(open(BLD_SRC, encoding='utf-8'))
+bways = [e for e in bd['elements'] if e['type'] == 'way']
+bways.sort(key=lambda x: x['id'])        # 确定性:按 OSM way id 排序
+bsel = bways[:150]                       # 体量闸:~170KB
+bout = {'version': 0.6,
+        'generator': 'citygen gen_fixture.py (subset of zjx-buildings, ODbL)',
+        'elements': bsel}
+with open(__file__.rsplit('\\', 1)[0] + '/zjx-buildings-sample.json', 'w',
+          encoding='utf-8', newline='\n') as f:
+    json.dump(bout, f, ensure_ascii=False, indent=1, separators=(',', ': '))
+lv = sum(1 for w in bsel if 'building:levels' in (w.get('tags') or {}))
+ht = sum(1 for w in bsel if 'height' in (w.get('tags') or {}))
+print('buildings:', len(bsel), 'levels:', lv, 'height:', ht)
