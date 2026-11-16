@@ -111,7 +111,7 @@ void roadColor(const std::string& cls, std::uint8_t& r, std::uint8_t& g,
 bool renderTopView(const Roadnet& net, const std::vector<Building>& builds,
                    const BBox& box, const TopViewConfig& cfg,
                    std::vector<std::uint8_t>& outPng, int& outW, int& outH,
-                   TopViewStats* stats) {
+                   TopViewStats* stats, const std::vector<Landmark>* landmarks) {
     TopViewStats st{};
     // 世界范围(bbox 四角局部米)+ 留白 → 画布。
     double minX = 1e300, maxX = -1e300, minZ = 1e300, maxZ = -1e300;
@@ -121,6 +121,14 @@ bool renderTopView(const Roadnet& net, const std::vector<Building>& builds,
         auto [x, z] = toLocalMeters(box, c[0], c[1]);
         minX = std::min(minX, x); maxX = std::max(maxX, x);
         minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
+    }
+    // M-CG1:地标锚点可能在 bbox 外(广州塔在南界外约 155m),画布自动扩到全覆盖。
+    if (landmarks) {
+        for (const Landmark& lm : *landmarks) {
+            auto [x, z] = toLocalMeters(box, lm.lat, lm.lon);
+            minX = std::min(minX, x); maxX = std::max(maxX, x);
+            minZ = std::min(minZ, z); maxZ = std::max(maxZ, z);
+        }
     }
     const double worldW = (maxX - minX) + 2.0 * cfg.marginM;
     const double worldH = (maxZ - minZ) + 2.0 * cfg.marginM;
@@ -172,15 +180,25 @@ bool renderTopView(const Roadnet& net, const std::vector<Building>& builds,
         drawPolyline(img, w, h, pts, hw, r, g2, b2);
     }
 
-    // ③ 内容计数(终扫一次;建筑灰度带 vs 其余非底色 = 路网)。
+    // ③ M-CG1 地标金色标记(顶层;固定 7px 半宽方块,与灰度明显区分)。
+    if (landmarks) {
+        for (const Landmark& lm : *landmarks) {
+            auto [xM, zM] = toLocalMeters(box, lm.lat, lm.lon);
+            auto [px, py] = toPx(xM, zM);
+            brushRect(img, w, h, px, py, 7.0f, 0xff, 0xd7, 0x00);
+        }
+    }
+
+    // ④ 内容计数(终扫一次;建筑灰度带 / 金色地标 / 其余非底色 = 路网)。
     for (std::size_t i = 0; i < img.size(); i += 3) {
         const std::uint8_t r = img[i], g = img[i + 1], b = img[i + 2];
         if (r == 0x20 && g == 0x24 && b == 0x2c) continue;   // 底色
+        if (r == 0xff && g == 0xd7 && b == 0x00) { ++st.landmarkPixels; continue; }
         if (r == g && g == b && r >= 0x58 && r <= 0xe8) ++st.buildingPixels;
         else ++st.roadPixels;
     }
 
-    // ④ PNG 编码(stb zlib 确定性)。
+    // ⑤ PNG 编码(stb zlib 确定性)。
     outPng.clear();
     const int ok = stbi_write_png_to_func(stbCallback, &outPng, w, h, 3,
                                           img.data(), w * 3);

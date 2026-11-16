@@ -8,6 +8,7 @@ add_library(citygen_core STATIC
     src/osm.cpp
     src/roadnet.cpp
     src/buildings.cpp
+    src/landmarks.cpp
     src/topview.cpp
     src/scene.cpp)
 target_include_directories(citygen_core PUBLIC
@@ -69,3 +70,15 @@ add_test(NAME cg0-export
 set_tests_properties(cg0-export PROPERTIES
     WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
     PASS_REGULAR_EXPRESSION "png=[0-9]+x[0-9]+ bytes=[0-9]+")
+
+# ---- M-CG1：whitelist 抑制/外挂统计锚 + 地标全产物（CG0 三参形态不变）----
+add_test(NAME cg1-export
+    COMMAND citygen export
+            --input ${CMAKE_CURRENT_SOURCE_DIR}/test/zjx-sample.json
+            --buildings ${CMAKE_CURRENT_SOURCE_DIR}/test/zjx-buildings-sample.json
+            --bbox 23.108,113.316,23.130,113.342
+            --landmarks ${CMAKE_CURRENT_SOURCE_DIR}/test/landmark_whitelist-sample.json
+            --out ${CMAKE_CURRENT_SOURCE_DIR}/test/out-cg1)
+set_tests_properties(cg1-export PROPERTIES
+    WORKING_DIRECTORY ${CMAKE_CURRENT_SOURCE_DIR}/test
+    PASS_REGULAR_EXPRESSION "landmarks=2 suppressed=1 outside=1")

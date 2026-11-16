@@ -1,0 +1,13 @@
+{
+  "version": 1,
+  "landmarks": [
+    {
+      "name": "广州塔",
+      "lat": 23.1066,
+      "lon": 113.3246,
+      "mesh": "canton_tower.glb",
+      "scale": 1.0,
+      "heightM": 620.3
+    }
+  ]
+}

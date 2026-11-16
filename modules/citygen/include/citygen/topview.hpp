@@ -8,6 +8,7 @@
 #pragma once
 
 #include "citygen/buildings.hpp"
+#include "citygen/landmarks.hpp"
 #include "citygen/roadnet.hpp"
 
 #include <cstdint>
@@ -25,11 +26,15 @@ struct TopViewConfig {
 struct TopViewStats {
     std::size_t buildingPixels = 0;
     std::size_t roadPixels = 0;
+    std::size_t landmarkPixels = 0;   // M-CG1 金色标记像素(内容锚)
 };
 
+// landmarks 非空时画布自动扩到所有地标锚点(广州塔在 bbox 南界外),金色方块标记。
+// 传 nullptr = M-CG0 冻结形态,逐字节保持 cg0-m0 产物。
 bool renderTopView(const Roadnet& net, const std::vector<Building>& builds,
                    const BBox& box, const TopViewConfig& cfg,
                    std::vector<std::uint8_t>& outPng, int& outW, int& outH,
-                   TopViewStats* stats = nullptr);
+                   TopViewStats* stats = nullptr,
+                   const std::vector<Landmark>* landmarks = nullptr);
 
 }  // namespace citygen

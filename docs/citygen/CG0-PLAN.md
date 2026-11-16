@@ -89,3 +89,21 @@ Overpass `[out:json]` 数据 → 区域(珠江新城一带 2~3km)真实路网 + 
 
 贴图注记(2026-11-16 排查):OSM 数据无图像(436 栋仅 2 条 `building:material`);引擎材质入口
 现成;程序化 facade 纹理(窗格/楼层条纹)归 M-CG1 一并评估;真实照片贴图无源且版权不可用。
+
+## 8. M-CG1 实施记录(2026-11-16,用户「用max」拍板)
+
+- **资产选型**:用户「用max」= 采用 3ds Max 抠出的 **620m 真实尺度塔**,不用 UE 2023 工程的
+  244m 艺术化缩比版(Actor scale=1.0 四图实测,差异来自模型自身缩比;UE 塔 9 个材质槽全空,
+  无贴图增益)。max 场景源 `E:/canton_work/`(FBX 570MB)、导出脚本 `extract_tower_glb.py`。
+- **资产修正(必记)**:首版 glb 单个 HERO 节点含 **4402 个 loose 分量**,其中约 13.5k 顶点
+  散布到 0.6~2.8km 外(别的场景道具),且 `export_yup=False` 让塔沿 Z 轴躺着。重导加空间窗
+  裁剪 + 底座中心/塔底原点归零 + `export_yup=True`:30506→25169 顶点 / 54702→44178 面,
+  高 620.33m、底 72×72m、零 node transform、glTF bounds Y=[0,620.33] X/Z=±36m,871396B。
+  FBX 贴图路径丢失属已知(贴图另议),不影响几何契约。
+- **契约落地**:`assets/citygen/landmark_whitelist.json`(osmId→glb + 塔底真实经纬度,
+  osmId=0 = bbox 外直接加)→ `loadLandmarkWhitelist` / `applyLandmarks`;bbox 内命中抑制
+  box 实体、bbox 外直接追加;`city.scene` 四参重载产 `lm_*` 真模型实体(mesh/label/
+  Transform),三参保持 CG0 逐字节;`topview` 地标金色方块 + 画布自动扩到 bbox 外锚点 +
+  `landmarkPixels` 内容锚;`export --landmarks` 白名单原文随产物落盘。
+- **范围边界**:本轮止于工具链(citygen CLI 产物 + 展示卡);引擎侧 `--traffic-city` 消费接线
+  仍按 §7「消费端接线时」另排;程序化 facade 贴图本轮未做(真实贴图无源,见上注记)。

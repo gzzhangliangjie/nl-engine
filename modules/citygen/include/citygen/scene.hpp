@@ -6,6 +6,7 @@
 #pragma once
 
 #include "citygen/buildings.hpp"
+#include "citygen/landmarks.hpp"
 #include "citygen/osm.hpp"
 
 #include <string>
@@ -22,8 +23,12 @@ struct BlockBox {
 bool buildingBlockBox(const Building& b, const BBox& box, BlockBox& out);
 
 // city.scene 文本(手写固定序确定性;meshPath = "buildings/box.obj")。
+// 三参版 = M-CG0 冻结形态(无地标),四参版 = M-CG1 追加真模型实体(只加不减)。
 std::string serializeCityScene(const std::vector<Building>& builds,
                                const BBox& box, const std::string& meshPath);
+std::string serializeCityScene(const std::vector<Building>& builds,
+                               const BBox& box, const std::string& meshPath,
+                               const std::vector<Landmark>& landmarks);
 
 // unit box OBJ 中间件文本(1×1×1,8 顶点 12 三角,原点在盒心)。
 std::string unitBoxObj();

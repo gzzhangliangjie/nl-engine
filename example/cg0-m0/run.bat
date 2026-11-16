@@ -1,6 +1,6 @@
 @echo off
 rem M-CG0 citygen tool gate (OSM real-map input, ZJX fixture anchors).
-rem Runs selftest(8 groups) / convert / export / determinism / usage / negative.
+rem Runs selftest(9 groups) / convert / export / determinism / usage / negative.
 rem All anchors are substring finds (findstr).
 setlocal
 set "ROOT=%~dp0..\.."
@@ -10,10 +10,10 @@ set "IN=%ROOT%\modules\citygen\test\zjx-sample.json"
 set "BLD=%ROOT%\modules\citygen\test\zjx-buildings-sample.json"
 set "BBOX=23.108,113.316,23.130,113.342"
 
-echo [seg1] selftest (8 groups)
+echo [seg1] selftest 9 groups
 "%EXE%" selftest > "%OUT%selftest.log" 2>&1
-findstr /c:"citygen selftest: PASS (8 groups, mini overpass sample)" "%OUT%selftest.log" >nul || (
-    echo [ERROR] selftest not PASS 8 groups
+findstr /c:"citygen selftest: PASS (9 groups, mini overpass sample)" "%OUT%selftest.log" >nul || (
+    echo [ERROR] selftest not PASS 9 groups
     exit /b 1
 )
 

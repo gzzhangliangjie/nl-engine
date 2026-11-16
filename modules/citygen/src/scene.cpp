@@ -41,11 +41,27 @@ std::string jsonEscape(const std::string& s) {
     return out;
 }
 
+// M-CG0 冻结形态:无地标,逐字节保持 cg0-m0 tag 产物。
 std::string serializeCityScene(const std::vector<Building>& builds,
                                const BBox& box, const std::string& meshPath) {
+    static const std::vector<Landmark> kNone;
+    return serializeCityScene(builds, box, meshPath, kNone);
+}
+
+// M-CG1:先 box 实体(顺序同 CG0),再 whitelist 顺序的地标真模型实体。
+// name 用 ASCII 安全形态(osm id / lm_序号);真名走实体级 "label"(A 档拍板,
+// 2026-11-16;只加不减,当前树内无引擎加载器,消费端接线时同契约实现)。
+std::string serializeCityScene(const std::vector<Building>& builds,
+                               const BBox& box, const std::string& meshPath,
+                               const std::vector<Landmark>& landmarks) {
     std::string s;
     char buf[640];
-    const std::uint32_t n = static_cast<std::uint32_t>(builds.size());
+    std::uint32_t emitted = 0;
+    for (const Building& b : builds) {
+        BlockBox bb;
+        if (buildingBlockBox(b, box, bb)) ++emitted;
+    }
+    const std::uint32_t n = emitted + static_cast<std::uint32_t>(landmarks.size());
     s += "{\n";
     s += "  \"version\": 1,\n";
     std::snprintf(buf, sizeof buf, "  \"nextID\": %u,\n", n + 1u);
@@ -56,9 +72,6 @@ std::string serializeCityScene(const std::vector<Building>& builds,
         BlockBox bb;
         if (!buildingBlockBox(b, box, bb)) continue;
         const double cy = b.heightM * 0.5;
-        // name 用 ASCII 安全形态(osm id);真名走 label 字段(M-CG0.2 A 档拍板
-        // 2026-11-16:OSM name 标签 → 实体级 "label",只加不减;当前树内无引擎
-        // 加载器,消费端 M-CG1/W2 接线时同契约实现)。无名字建筑不产 label。
         char head[160];
         std::snprintf(head, sizeof head,
                       "    { \"id\": %u, \"name\": \"bld_%llu\", \"flags\": 0, "
@@ -77,9 +90,37 @@ std::string serializeCityScene(const std::vector<Building>& builds,
                       "    } }%s\n",
                       meshPath.c_str(), bb.cx, cy, bb.cz,
                       bb.wx, b.heightM, bb.wz,
-                      id == n ? "" : ",");
-        ent += buf;
+                      id < n ? "," : "");
         s += ent;
+        s += buf;
+        ++id;
+    }
+    // 地标实体:glb 零 transform、Y-up 米制、原点在底座中心 → position.y=0、
+    // scale=lm.scale、rotation 单位。lat/lon → citygen 局部米(同 box 锚)。
+    for (std::size_t i = 0; i < landmarks.size(); ++i) {
+        const Landmark& lm = landmarks[i];
+        const auto [x, z] = toLocalMeters(box, lm.lat, lm.lon);
+        char head[160];
+        std::snprintf(head, sizeof head,
+                      "    { \"id\": %u, \"name\": \"lm_%zu\", \"flags\": 0, "
+                      "\"parent\": 0,\n",
+                      id, i);
+        std::string ent = head;
+        if (!lm.name.empty())
+            ent += "      \"label\": \"" + jsonEscape(lm.name) + "\",\n";
+        std::snprintf(buf, sizeof buf,
+                      "      \"components\": {\n"
+                      "      \"Model\": { \"mesh\": \"%s\", "
+                      "\"tint\": [1.0, 1.0, 1.0] },\n"
+                      "      \"Transform\": { \"position\": [%.2f, 0.00, %.2f], "
+                      "\"scale\": [%.2f, %.2f, %.2f], "
+                      "\"rotation\": [0.0, 0.0, 0.0, 1.0] }\n"
+                      "    } }%s\n",
+                      lm.mesh.c_str(), x, z,
+                      lm.scale, lm.scale, lm.scale,
+                      id < n ? "," : "");
+        s += ent;
+        s += buf;
         ++id;
     }
     s += "  ]\n";

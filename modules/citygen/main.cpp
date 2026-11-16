@@ -8,6 +8,7 @@
 #include "citygen/osm.hpp"
 #include "citygen/roadnet.hpp"
 #include "citygen/buildings.hpp"
+#include "citygen/landmarks.hpp"
 #include "citygen/topview.hpp"
 #include "citygen/scene.hpp"
 
@@ -33,8 +34,10 @@ int usage() {
         "                  --out <roadnet.json>\n"
         "  citygen export --input <osm.json> --buildings <osm-bld.json>\n"
         "                 --bbox south,west,north,east --out <dir>\n"
+        "                 [--landmarks <landmark_whitelist.json>]\n"
         "                 (产出 roadnet.json / city.scene / buildings/box.obj /\n"
-        "                  top.png / ODbL-attribution.txt)\n");
+        "                  top.png / ODbL-attribution.txt;--landmarks 追加真模型\n"
+        "                  实体与俯视金色标记,M-CG1)\n");
     return 2;
 }
 
@@ -236,7 +239,53 @@ int selftest() {
         CHECK(tvs.roadPixels > 0);
     }
 
-    std::printf("citygen selftest: PASS (8 groups, mini overpass sample)\n");
+    // ⑨ M-CG1 地标注入:三参/空白名单四参逐字节同构(CG0 冻结形态);
+    //   bbox 内命抑制 box、bbox 外广州塔直接加;真模型实体/金色像素锚。
+    const char* kWhitelist = R"JSON({"version":1,"landmarks":[
+      {"osmId":10,"mesh":"suppressed_east.glb","heightM":900},
+      {"osmId":0,"name":"广州塔","lat":23.1066,"lon":113.3246,
+       "mesh":"canton_tower.glb","heightM":620.3}]})JSON";
+    std::vector<Landmark> wl = loadLandmarkWhitelist(kWhitelist);
+    std::fprintf(stderr, "S9 whitelist=%zu\n", wl.size());
+    CHECK(wl.size() == 2);
+    std::vector<Building> lblds = blds;
+    LandmarkStats lms2;
+    std::vector<Landmark> lms = applyLandmarks(lblds, wl, &lms2);
+    CHECK(lblds.size() == 1);          // way10 被抑制,way11 仍是 box
+    CHECK(lms2.suppressed == 1 && lms2.addedOutside == 1);
+    CHECK(lms.size() == 2);
+    CHECK(lms[0].name == "楼" && lms[0].lat > 23.1109 && lms[0].lat < 23.1111);
+    CHECK(lms[1].lat > 23.1065 && lms[1].lat < 23.1067);
+    // CG0 冻结:三参与「空白名单四参」必须逐字节一致。
+    CHECK(serializeCityScene(blds, zjx, "buildings/box.obj") ==
+          serializeCityScene(blds, zjx, "buildings/box.obj", std::vector<Landmark>{}));
+    const std::string scene9 =
+        serializeCityScene(lblds, zjx, "buildings/box.obj", lms);
+    CHECK(scene9.find("\"nextID\": 4") != std::string::npos);  // 1 box + 2 地标 + 1
+    CHECK(scene9.find("suppressed_east.glb") != std::string::npos);  // 抑制 box → 产真模型
+    CHECK(scene9.find("canton_tower.glb") != std::string::npos);
+    CHECK(scene9.find("广州塔") != std::string::npos);
+    {
+        TopViewConfig tvc9;
+        tvc9.targetWidth = 256;
+        std::vector<std::uint8_t> png0, png9;
+        int pw0 = 0, ph0 = 0, pw9 = 0, ph9 = 0;
+        TopViewStats tvs0, tvs9;
+        CHECK(renderTopView(n2, lblds, zjx, tvc9, png0, pw0, ph0, &tvs0));
+        CHECK(renderTopView(n2, lblds, zjx, tvc9, png9, pw9, ph9, &tvs9, &lms));
+        std::fprintf(stderr, "S9 png %dx%d->%dx%d lmPx=%zu\n",
+                     pw0, ph0, pw9, ph9, tvs9.landmarkPixels);
+        CHECK(tvs9.landmarkPixels > 0);   // 金色标记真的画进画布
+        CHECK(ph9 > ph0);                 // 画布南扩(广州塔在 bbox 外)
+        CHECK(tvs0.landmarkPixels == 0);  // CG0 路径不带标记
+        CHECK(png9[0] == 0x89 && png9[1] == 'P');
+    }
+    bool badMesh = false;
+    try { loadLandmarkWhitelist("{\"landmarks\":[{\"mesh\":\"../evil.glb\"}]}"); }
+    catch (const std::exception&) { badMesh = true; }
+    CHECK(badMesh);   // 路径穿越式 mesh 名显式拒绝
+
+    std::printf("citygen selftest: PASS (9 groups, mini overpass sample)\n");
     std::fflush(stdout);
     return 0;
 }
@@ -394,6 +443,7 @@ int cmdExport(int argc, char** argv) {
     using namespace citygen;
     const char* input = nullptr;
     const char* bldInput = nullptr;
+    const char* landmarksPath = nullptr;
     const char* outDir = nullptr;
     bool haveBox = false;
     citygen::BBox box;
@@ -402,6 +452,8 @@ int cmdExport(int argc, char** argv) {
             input = argv[++i];
         } else if (!std::strcmp(argv[i], "--buildings") && i + 1 < argc) {
             bldInput = argv[++i];
+        } else if (!std::strcmp(argv[i], "--landmarks") && i + 1 < argc) {
+            landmarksPath = argv[++i];
         } else if (!std::strcmp(argv[i], "--bbox") && i + 1 < argc) {
             if (!parseBBox(argv[++i], box)) {
                 std::fprintf(stderr, "citygen: bad --bbox (want south,west,north,east)\n");
@@ -443,7 +495,22 @@ int cmdExport(int argc, char** argv) {
         if (!b.ways.empty() || bldText.size() > 64) b = filterBBox(b, box);
         BuildingStats bs;
         std::vector<Building> blds = extractBuildings(b, &bs);
-        const std::string sceneText = serializeCityScene(blds, box, "buildings/box.obj");
+        std::vector<Landmark> landmarks;
+        LandmarkStats lmStats;
+        if (landmarksPath) {
+            std::string wlText;
+            if (!readTextFile(landmarksPath, wlText)) {
+                std::fprintf(stderr, "citygen: cannot read '%s'\n", landmarksPath);
+                return 2;
+            }
+            landmarks = applyLandmarks(blds, loadLandmarkWhitelist(wlText), &lmStats);
+            // 白名单原文随产物落盘,消费端按 mesh 字段解析引用(只加不减)。
+            writeFileIfChangedOrNew(
+                (std::filesystem::path(outDir) / "landmark_whitelist.json").string(),
+                wlText);
+        }
+        const std::string sceneText =
+            serializeCityScene(blds, box, "buildings/box.obj", landmarks);
         writeFileIfChangedOrNew((std::filesystem::path(outDir) / "city.scene").string(),
                                 sceneText);
         writeFileIfChangedOrNew((std::filesystem::path(outDir) / "buildings" / "box.obj").string(),
@@ -453,7 +520,8 @@ int cmdExport(int argc, char** argv) {
         std::vector<std::uint8_t> png;
         int pw = 0, ph = 0;
         TopViewStats tvs;
-        if (!renderTopView(net, blds, box, tvc, png, pw, ph, &tvs)) {
+        if (!renderTopView(net, blds, box, tvc, png, pw, ph, &tvs,
+                           landmarks.empty() ? nullptr : &landmarks)) {
             std::fprintf(stderr, "citygen: top view render failed\n");
             return 1;
         }
@@ -473,12 +541,13 @@ int cmdExport(int argc, char** argv) {
             "Source: OpenStreetMap data via Overpass API (c) OpenStreetMap contributors, ODbL 1.0.\n"
             "Derived products in this directory must carry this attribution when distributed.\n");
 
-        std::printf("nodes=%zu edges=%zu buildings=%zu\n"
-                    "png=%dx%d bytes=%zu bldPx=%zu roadPx=%zu roadnet=%zu scene=%zu\n"
+        std::printf("nodes=%zu edges=%zu buildings=%zu landmarks=%zu suppressed=%zu outside=%zu\n"
+                    "png=%dx%d bytes=%zu bldPx=%zu roadPx=%zu lmPx=%zu roadnet=%zu scene=%zu\n"
                     "wrote %s\n",
                     net.nodes.size(), net.edges.size(), blds.size(),
+                    landmarks.size(), lmStats.suppressed, lmStats.addedOutside,
                     pw, ph, png.size(), tvs.buildingPixels, tvs.roadPixels,
-                    roadnetText.size(), sceneText.size(),
+                    tvs.landmarkPixels, roadnetText.size(), sceneText.size(),
                     outDir);
     } catch (const std::exception& e) {
         std::fprintf(stderr, "citygen: export error: %s\n", e.what());

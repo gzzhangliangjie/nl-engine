@@ -15879,8 +15879,8 @@
    "date": "2026-11-16",
    "summary": "M-CG0：modules/citygen 自研库——Overpass [out:json] 解析（vendored nlohmann 3.10.4 单头，只进 .cpp）+ bbox 过滤 + WGS-84→局部米锚（dx=Δlng·cos(23.1°)·111320，BusViewer 同公式）；highway→roadnet.json（路口合并/类别→速度车道缺省表/maxspeed+lanes 标签覆盖/M-T4 signal 规则/确定性序列化，新增 osm_name/cls 字段只加不减）；building→块（height 标签>levels×3>9m）→city.scene（实体级 label 字段=OSM name，A 档拍板，80/150 栋带真名含西塔 440.2m）+ 俯视 PNG（确定性栅格：建筑高度灰度 0x58..0xe8/路网类别分色，stb vendored；TopViewStats 内容锚 bldPx/roadPx>0 拦坐标系错位假绿）。输入素材复用 GuangzhouBusViewer 64 分片（tile-3-2 裁 fixture 300 ways）+ mail.ru 镜像拉建筑 436 栋（GET+UA+代理+重试）。selftest 8 组/单测 6 用例全绿；真实产物 375 节点/417 边/150 栋/2048×1875 PNG。M-CG1 挂账：地标混合架构（canton max 场景只抠地标单体 glb + landmark_whitelist.json 抑制，广州塔零冲突先行）。",
    "acceptance": [
-    "selftest 8 组 PASS（解析/bbox/局部坐标锚/过滤/roadnet 拓扑/oneway+maxspeed+lanes+序列化/建筑/PNG 内容锚 bldPx=610）",
-    "ctest 6/6 双后端绿（cg0-selftest/sample/convert/negative/buildings/export）",
+    "selftest 9 组 PASS（CG0 原 8 组冻结 + S9 新增地标白名单）（解析/bbox/局部坐标锚/过滤/roadnet 拓扑/oneway+maxspeed+lanes+序列化/建筑/PNG 内容锚 bldPx=610）",
+    "ctest 7/7 双后端绿（cg0-selftest/sample/convert/negative/buildings/export）",
     "真实珠江新城 export：375 nodes/417 edges/150 buildings，PNG 2048×1875 bldPx=263136 roadPx=286191（肉眼验收：街区围合/高度亮度分层/立交分明）",
     "ODbL 署名随产物落盘；city.scene JSON 逐级解析验证（label 实体级 80/150）"
    ],
@@ -15909,7 +15909,7 @@
       "selftest"
      ],
      "expectExit": 0,
-     "expectLog": "citygen selftest: PASS (8 groups, mini overpass sample)",
+     "expectLog": "citygen selftest: PASS (9 groups, mini overpass sample)",
      "command": "citygen selftest"
     },
     {
@@ -15950,6 +15950,87 @@
      "expectExit": 0,
      "expectLog": "buildings=150",
      "command": "citygen export --input modules/citygen/test/zjx-sample.json --buildings modules/citygen/test/zjx-buildings-sample.json --bbox 23.108,113.316,23.130,113.342 --out example/cg0-m0",
+     "cwd": "{root}"
+    },
+    {
+     "id": "negative",
+     "name": "负向：输入文件不存在显式退出 2",
+     "kind": "tool",
+     "note": "非法输入不静默（M-CG0.0 契约）。",
+     "args": [
+      "stats",
+      "--input",
+      "nonexistent.json"
+     ],
+     "expectExit": 2,
+     "expectLog": "citygen: cannot read 'nonexistent.json'",
+     "command": "citygen stats --input nonexistent.json"
+    }
+   ]
+  },
+  {
+   "id": "cg1-m0",
+   "label": "CG1 M-CG1",
+   "name": "citygen：广州塔地标混合（max 单体 glb + landmark_whitelist.json 抑制 → city.scene 真模型 + 俯视金色标记）",
+   "tag": "cg1-m0",
+   "date": "2026-11-16",
+   "summary": "M-CG1：用户拍板「用max」= 采用 3ds Max 抠出的 620m 真实广州塔,弃 UE 2023 工程 244m 艺术缩比版(Actor scale=1,塔槽材质全空)。FBX 570MB 的 HERO 节点含 4402 个 loose 分量(13.5k 顶点散布 0.6~2.8km 外)且 Z-up 躺着——重导加空间窗裁剪+底座原点归零+export_yup=True:30506→25169 顶点/54702→44178 面,高 620.33m、底 72×72m、零 node transform,glTF bounds Y=[0,620.33],871KB。契约:landmark_whitelist.json(osmId→glb+塔底真实经纬度 23.1066N/113.3246E;osmId=0=bbox 外直接加)→ loadLandmarkWhitelist/applyLandmarks;bbox 内命中抑制 box、bbox 外追加;city.scene 四参重载产 lm_* 真模型实体(mesh/label/Transform),三参保持 CG0 逐字节;topview 金色方块标记+画布自动南扩+landmarkPixels 内容锚;export --landmarks 白名单随产物落盘。引擎侧 --traffic-city 消费接线与本轮无关,仍另排。",
+   "acceptance": [
+    "selftest 9 组 PASS（新增 S9 白名单抑制/外挂 + CG0 三参逐字节同构 + 金色像素锚）",
+    "ctest citygen 7/7 双后端绿（cg0 六项 + cg1-export fixture 锚 landmarks=2 suppressed=1 outside=1）；全量 183/183 ×2",
+    "真实 export：375 节点/417 边/150 boxes + 广州塔 lm_0，PNG 2048×1991 bldPx=263673 roadPx=294887 lmPx=256，city.scene 151 实体/nextID=152",
+    "两份 run.bat 六段 ALL GREEN；--only cg1-m0 8/8 bytes、--only cg0-m0 10/10 bytes 双后端 ALL GREEN",
+    "CG0 冻结保形：三参与空白名单四参 scene 逐字节一致，cg0-m0 五文件 sha256 全同零漂"
+   ],
+   "preview": "example/cg1-m0/top.png",
+   "exe": {
+    "dx12": "build/DX12/citygen.exe",
+    "vulkan": "build/VULKAN/citygen.exe"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "新增 --landmarks 可选项说明。",
+     "args": [],
+     "expectExit": 2,
+     "expectLog": "citygen - nl-engine city generation (OSM input, M-CG0)",
+     "command": "citygen"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：9 组断言（新增地标白名单/抑制/金色像素）",
+     "kind": "tool",
+     "note": "S9 同时验证三参与空白名单四参 city.scene 逐字节一致，护住 CG0 冻结形态。",
+     "args": [
+      "selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen selftest: PASS (9 groups, mini overpass sample)",
+     "command": "citygen selftest"
+    },
+    {
+     "id": "export",
+     "name": "export：珠江新城 fixture + 广州塔白名单 → 地标产物",
+     "kind": "tool",
+     "note": "广州塔在 bbox 南界外零抑制直接加；白名单原文随产物落盘。 (cwd={root}: 相对路径输入,regression case 级 cwd 覆盖)",
+     "args": [
+      "export",
+      "--input",
+      "modules/citygen/test/zjx-sample.json",
+      "--buildings",
+      "modules/citygen/test/zjx-buildings-sample.json",
+      "--bbox",
+      "23.108,113.316,23.130,113.342",
+      "--landmarks",
+      "{root}/assets/citygen/landmark_whitelist.json",
+      "--out",
+      "{root}/example/cg1-m0"
+     ],
+     "expectExit": 0,
+     "expectLog": "landmarks=1 suppressed=0 outside=1",
+     "command": "citygen export --input modules/citygen/test/zjx-sample.json --buildings modules/citygen/test/zjx-buildings-sample.json --bbox 23.108,113.316,23.130,113.342 --landmarks assets/citygen/landmark_whitelist.json --out example/cg1-m0",
      "cwd": "{root}"
     },
     {
