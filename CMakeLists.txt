@@ -50,7 +50,7 @@ message(STATUS "nl-engine backend: ${NL_BACKEND_UPPER} (no vendor SDK, no networ
 # module 名 = modules/ 下目录名，一对一无映射。
 set(NL_MODULES "ALL" CACHE STRING "modules/<dir> build list: ALL (default) or semicolon list like anim-tools;nav-tools")
 set(NL_ALL_MODULES
-    anim-tools audio-tools cam-tools city-tools gi-tools gl-tools input-tools
+    anim-tools audio-tools cam-tools city-tools citygen gi-tools gl-tools input-tools
     log-tools material-graph-tools nav-tools net-tools phys-tools sprite-tools
     traffic-tools vfx-tools nanite-scene nl-script nanite-console nanite-tools)
 

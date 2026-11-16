@@ -108,3 +108,4 @@ example/*/verify-*
 # 产物（消费通道：OBJ -> .nmesh/.glb 转换，asset-ingest 轨道），不是编译
 # 中间产物——上面的 *.obj 兜底规则会静默挡掉它们，此处根锚定反白。
 !example/*/blocks/*.obj
+assets/osm/
