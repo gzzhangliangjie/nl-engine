@@ -16048,6 +16048,90 @@
      "command": "citygen stats --input nonexistent.json"
     }
    ]
+  },
+  {
+   "id": "cg2-m0",
+   "label": "CG2 M-CG2",
+   "name": "citygen：真实 OSM 城市进引擎（citygen2engine.py 派生 + viewer --traffic-city 双后端实跑）",
+   "tag": "cg2-m0",
+   "date": "2026-11-16",
+   "summary": "M-CG2 A①：新增 scripts/citygen2engine.py（stdlib,只读消费 cg1-m0 四件套,viewer/core/renderer 零源码改动）。city.scene → city.scene.engine 正则只改 mesh 值保字节:150 box 按高度分 3 档共享带 ambientCG CC0 贴图 glb(tier1=112,tier2=6,tier3=32),广州塔 lm_0 mesh 保留;注入 8 car_* 实体(nextID 152→160)。派生路网适配(Q-CG2C 拍板双向化最大分量):真实 OSM 375 节点/417 边裂 44 弱分量,保留最大 199 节点/260 边+反向=452 有向边,避免 TrafficCarSystem 全池随机选路落到孤立分量;坐标中位数归一化到世界原点(viewer 相机固定)。viewer 双后端 --traffic-city 实跑 rc=0: 8 cars/500 lanes/401 lamps/600 tick odometer 496.27m;街景截图可见建筑贴图立面+车灯,非纯背景。冻结 cg0/cg1 零改。selftest 59 断言。",
+   "acceptance": [
+    "selftest 59 断言 PASS(白名单/高度分档/nextID/车序/路网适配/坐标归一/e2e 单次产物)",
+    "drive 双跑逐字节一致:city.scene.engine/roadnet/city_delivery.png/ODbL/署名",
+    "真实产物:150 boxes+广州塔 lm_0+8 cars=159 实体,mesh 全 flat glb,nextID=160",
+    "viewer --traffic-city 双后端 rc=0: 8 cars registered / lanes=500 / lamps=401 / odometer 496.27m;街景+俯视截图双后端",
+    "run.bat 六段 ALL GREEN;regression --only cg2-m0 双后端 bytes ALL GREEN",
+    "冻结面:cg0-m0/cg1-m0 五文件 sha256 零漂;roadnet 源 375/417 不变,派生注记随产物落盘"
+   ],
+   "preview": "example/cg2-m0/city_delivery.png",
+   "exe": {
+    "dx12": "{python}",
+    "vulkan": "{python}"
+   },
+   "cases": [
+    {
+     "id": "usage",
+     "name": "usage：子命令总览（无参数，退出码 2）",
+     "kind": "tool",
+     "note": "新增 --models-out/--cars 选项说明。",
+     "args": [
+      "{root}/scripts/citygen2engine.py"
+     ],
+     "expectExit": 2,
+     "expectLog": "citygen2engine - nl-engine citygen tools",
+     "command": "citygen2engine.py"
+    },
+    {
+     "id": "selftest",
+     "name": "selftest：59 断言（含真实 fixture e2e 单次）",
+     "kind": "tool",
+     "note": "覆盖白名单/高度分档/nextID/车序/路网适配/坐标归一/PNG；双跑逐字节由 run.bat seg2 承担。",
+     "args": [
+      "{root}/scripts/citygen2engine.py",
+      "selftest",
+      "--verbose"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen2engine selftest: PASS (59 assertions)",
+     "command": "citygen2engine.py selftest --verbose"
+    },
+    {
+     "id": "drive",
+     "name": "drive：cg1-m0 四件套 → 引擎交付物",
+     "kind": "tool",
+     "note": "真实珠江新城数据;派生路网适配+坐标归一;车 8 辆。(cwd={root})\n",
+     "args": [
+      "{root}/scripts/citygen2engine.py",
+      "drive",
+      "--src",
+      "{root}/example/cg1-m0",
+      "--out",
+      "{root}/example/cg2-m0"
+     ],
+     "expectExit": 0,
+     "expectLog": "citygen2engine drive OK",
+     "command": "citygen2engine.py drive --src example/cg1-m0 --out example/cg2-m0",
+     "cwd": "{root}"
+    },
+    {
+     "id": "negative",
+     "name": "负向：输入目录不存在显式退出 2",
+     "kind": "tool",
+     "note": "非法输入不静默。",
+     "args": [
+      "{root}/scripts/citygen2engine.py",
+      "drive",
+      "--src",
+      "nonexistent-dir",
+      "--out",
+      "{root}/example/cg2-m0/negative-out"
+     ],
+     "expectExit": 2,
+     "expectLog": "citygen2engine: --src not a directory",
+     "command": "citygen2engine.py drive --src nonexistent-dir --out example/cg2-m0/negative-out"
+    }
+   ]
   }
  ]
 }

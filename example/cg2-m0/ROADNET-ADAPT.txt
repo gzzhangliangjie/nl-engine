@@ -1,0 +1,6 @@
+citygen2engine M-CG2 derived roadnet adapter (Q-CG2C=bidirectional largest component)
+source: example/cg1-m0/roadnet.json (frozen, ODbL, unchanged)
+source nodes=375 edges=417 weak_components=44
+kept largest weak component nodes=199 edges=260
+derived bidirectional edges=452 (reverse of each kept edge; oneway semantics
+  preserved in source roadnet, adapted here only for closed-loop route init)

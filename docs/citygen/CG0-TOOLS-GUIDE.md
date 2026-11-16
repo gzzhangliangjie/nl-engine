@@ -84,4 +84,34 @@ citygen export   --input <osm.json> --buildings <bld.json> --bbox S,W,N,E --out 
   0.6~2.8km 外),必须空间窗裁剪,否则导出一堆别处道具;② glTF 高度轴是 Y,
   `export_yup=False` 会让塔沿 Z 躺倒;③ 俯视画布不扩则 bbox 外地标被裁,
   `landmarkPixels=0` 是假绿;④ 真实照片贴图无源(FBX 贴图路径丢失、UE 塔槽全空),
-  程序化 facade 另排。
+  facade 贴图链已由 W1.1 ambientCG CC0 三档覆盖,M-CG2 把 citygen 真实数据首次接上该链。
+
+## M-CG2 引擎交付（2026-11-16,`cg2-m0`）
+
+- **脚本**：`scripts/citygen2engine.py`（stdlib,Python 3.13;复用 `obj2glb.py` 的
+  `--maps` 嵌贴图链）。`drive --src <citygen 产物目录> --out <交付目录>`
+  只读消费 `city.scene`/`roadnet.json`/`buildings/box.obj`/白名单/署名/PNG。
+- **scene 派生**：`city.scene.engine` 正则只改 `"mesh"` 值 + `nextID` + 追加
+  `car_*` 实体;其余字节(含 UTF-8 label 与 `lm_*`)逐字节保真。150 box 按
+  `Transform.scale[1]` 分三档共享 glb（<30m tier1=112 / 30~80m tier2=6 /
+  ≥80m tier3=32），各档内嵌 ambientCG CC0 `tierN.jpg`;塔 `lm_0` mesh 保留
+  `canton_tower.glb`。8 辆 `car_00..07` 轮换 sedan/taxi/van/police,
+  nextID 152→160。
+- **派生路网适配(Q-CG2C 用户拍板=双向化最大分量)**：真实 OSM 375 节点/
+  417 边裂 44 个弱分量,而 `TrafficCarSystem::init` 用 fnv1a64 从全 lane 池
+  随机选起终点,孤立分量必报 `goal lane not reachable`（8 个 seed 全挂实锤）。
+  派生层保留最大弱分量 199 节点/260 边,补反向边=452 有向边;源 roadnet
+  冻结零改,单向语义只在注记 `ROADNET-ADAPT.txt` 说明。坐标取节点中位数
+  归一化到世界原点（viewer 相机固定在原点,km 级坐标会出画）。
+- **消费验收**：`viewer --traffic-city example/cg2-m0` 双后端 rc=0,
+  `8 cars registered | lanes=500 | signal lamps=401`,600 tick odometer
+  496.27m;街景 `cg2-street.png` 可见建筑窗格贴图与车灯,俯视 `cg2-top.png`
+  可见楼群分布。双后端 PNG 各自存档(`-VULKAN` 后缀)。
+- **坑**：① viewer rc=0 ≠ 画面有内容——首轮街景纯背景色,根因是坐标 km 级
+  而相机盯原点,必须派生层归一化 + 肉眼核验截图;② selftest 含 e2e 双跑
+  >120s 被默认超时杀,双跑确定性移到 run.bat seg2;③ `%~dp0` 已含尾 `\`,
+  拼子路径用 `%ROOT%\assets` 而非 `%ROOT%assets`;④ **证据图 O(像素×N) 性能陷阱**：
+  初版每像素遍历 159 实体（2048² 像素=6.6 亿次 Python 循环）致 selftest 90s+ 被
+  regression 超时杀,改网格预索引 O(1) 查询 + 画布降到 1024² 后 59 断言 1.9s;
+  ⑤ **python 工具卡 args 必须前置脚本路径**（W1 GUIDE §4 铁律）：`exe={python}`
+  时漏写 = python 把 `usage` 当脚本名跑裸 REPL,regression 90s 超时。

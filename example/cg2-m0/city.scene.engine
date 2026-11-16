@@ -1,0 +1,882 @@
+{
+  "version": 1,
+  "nextID": 160,
+  "entities": [
+    { "id": 1, "name": "bld_184738716", "flags": 0, "parent": 0,
+      "label": "广州国际金融中心(广州西塔)",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1047.00, 220.10, -322.89], "scale": [65.75, 440.20, 64.88], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 2, "name": "bld_240896441", "flags": 0, "parent": 0,
+      "label": "广州图书馆",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-767.19, 10.50, -477.57], "scale": [146.22, 21.00, 94.17], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 3, "name": "bld_240896442", "flags": 0, "parent": 0,
+      "label": "广东省博物馆",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-681.82, 7.50, -636.51], "scale": [114.50, 15.00, 114.52], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 4, "name": "bld_240896445", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1120.09, 4.50, -997.64], "scale": [101.07, 9.00, 185.19], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 5, "name": "bld_243319593", "flags": 0, "parent": 0,
+      "label": "广州银行大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-776.83, 133.90, 483.95], "scale": [47.78, 267.80, 50.24], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 6, "name": "bld_243319595", "flags": 0, "parent": 0,
+      "label": "利通广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-793.14, 151.35, 586.60], "scale": [50.12, 302.70, 50.46], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 7, "name": "bld_292663264", "flags": 0, "parent": 0,
+      "label": "优托邦2座",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-144.33, 4.50, -311.43], "scale": [241.48, 9.00, 108.12], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 8, "name": "bld_295928085", "flags": 0, "parent": 0,
+      "label": "珠江城大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1077.82, 154.80, 397.36], "scale": [77.46, 309.60, 48.23], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 9, "name": "bld_299687657", "flags": 0, "parent": 0,
+      "label": "广州周大福金融中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-749.78, 6.00, -292.80], "scale": [105.74, 12.00, 135.14], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 10, "name": "bld_299687659", "flags": 0, "parent": 0,
+      "label": "高德置地广场（夏）",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1028.27, 4.50, -3.49], "scale": [68.69, 9.00, 126.57], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 11, "name": "bld_299812752", "flags": 0, "parent": 0,
+      "label": "保利V座",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-661.68, 4.50, 118.11], "scale": [114.11, 9.00, 83.20], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 12, "name": "bld_299812753", "flags": 0, "parent": 0,
+      "label": "富力君悦大酒店",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1027.57, 4.50, 180.72], "scale": [60.70, 9.00, 130.72], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 13, "name": "bld_299812756", "flags": 0, "parent": 0,
+      "label": "珠江投资大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier2.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-791.06, 25.50, 168.01], "scale": [62.57, 51.00, 125.60], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 14, "name": "bld_299812757", "flags": 0, "parent": 0,
+      "label": "高德置地广场（春）",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1148.53, 7.50, -38.16], "scale": [125.72, 15.00, 102.42], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 15, "name": "bld_299812758", "flags": 0, "parent": 0,
+      "label": "高德置地广场（秋）",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-794.11, 4.50, -35.51], "scale": [66.74, 9.00, 128.54], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 16, "name": "bld_303255382", "flags": 0, "parent": 0,
+      "label": "云来斯堡酒店",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [856.51, 7.50, 546.54], "scale": [90.59, 15.00, 86.04], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 17, "name": "bld_303287745", "flags": 0, "parent": 0,
+      "label": "嘉冠国际大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [928.86, 4.50, 689.26], "scale": [43.60, 9.00, 48.14], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 18, "name": "bld_312876742", "flags": 0, "parent": 0,
+      "label": "富力中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1192.94, 121.50, -361.43], "scale": [56.94, 243.00, 57.76], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 19, "name": "bld_312876744", "flags": 0, "parent": 0,
+      "label": "合景国际金融广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1185.84, 9.00, -449.52], "scale": [72.97, 18.00, 77.43], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 20, "name": "bld_312876745", "flags": 0, "parent": 0,
+      "label": "广州市第二少年宫",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1065.65, 4.50, -465.19], "scale": [144.03, 9.00, 84.87], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 21, "name": "bld_312888407", "flags": 0, "parent": 0,
+      "label": "广州友谊商店(国金店)",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1093.54, 7.50, -267.67], "scale": [74.07, 15.00, 163.07], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 22, "name": "bld_312888482", "flags": 0, "parent": 0,
+      "label": "广东全球通大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1158.91, 4.50, 100.73], "scale": [114.10, 9.00, 124.40], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 23, "name": "bld_312888942", "flags": 0, "parent": 0,
+      "label": "广晟国际大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1025.36, 180.00, 497.25], "scale": [47.40, 360.00, 48.84], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 24, "name": "bld_312888944", "flags": 0, "parent": 0,
+      "label": "富力盈信大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1179.14, 61.50, 507.58], "scale": [55.20, 123.00, 39.35], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 25, "name": "bld_313517105", "flags": 0, "parent": 0,
+      "label": "富力盈隆广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-718.31, 63.00, 672.98], "scale": [58.92, 126.00, 43.88], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 26, "name": "bld_313517106", "flags": 0, "parent": 0,
+      "label": "恒大中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-629.41, 64.50, 667.57], "scale": [49.90, 129.00, 49.12], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 27, "name": "bld_313517107", "flags": 0, "parent": 0,
+      "label": "维家思广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-659.23, 4.50, 516.13], "scale": [111.26, 9.00, 181.94], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 28, "name": "bld_334124301", "flags": 0, "parent": 0,
+      "label": "高德置地广场（冬）",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-673.16, 4.50, -58.14], "scale": [131.71, 9.00, 163.60], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 29, "name": "bld_334125146", "flags": 0, "parent": 0,
+      "label": "中和广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-473.31, 51.00, -706.12], "scale": [55.05, 102.00, 57.87], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 30, "name": "bld_334125147", "flags": 0, "parent": 0,
+      "label": "博雅首府",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-484.81, 4.50, -620.63], "scale": [91.20, 9.00, 56.81], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 31, "name": "bld_334125148", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-641.15, 4.50, -459.68], "scale": [62.10, 9.00, 62.13], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 32, "name": "bld_347808399", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier2.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1178.82, 28.50, -1633.66], "scale": [99.10, 57.00, 100.03], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 33, "name": "bld_372680834", "flags": 0, "parent": 0,
+      "label": "广东农信大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1077.77, 4.50, 548.62], "scale": [44.30, 9.00, 38.13], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 34, "name": "bld_372680835", "flags": 0, "parent": 0,
+      "label": "联通广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1168.43, 4.50, 532.47], "scale": [85.82, 9.00, 62.18], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 35, "name": "bld_372680836", "flags": 0, "parent": 0,
+      "label": "广州天河领展广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1103.78, 12.00, 340.66], "scale": [127.94, 24.00, 127.12], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 36, "name": "bld_390456143", "flags": 0, "parent": 0,
+      "label": "富力·盈盛广场B座",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1068.44, 42.00, -275.89], "scale": [59.52, 84.00, 42.44], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 37, "name": "bld_411044285", "flags": 0, "parent": 0,
+      "label": "南国酒店",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1235.33, 4.50, -683.02], "scale": [62.62, 9.00, 65.44], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 38, "name": "bld_422618935", "flags": 0, "parent": 0,
+      "label": "红线女艺术中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [877.31, 4.50, 442.21], "scale": [47.43, 9.00, 61.74], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 39, "name": "bld_426074245", "flags": 0, "parent": 0,
+      "label": "广东电力发展股份有限公司",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [59.51, 4.50, 763.34], "scale": [53.23, 9.00, 63.30], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 40, "name": "bld_442558278", "flags": 0, "parent": 0,
+      "label": "猎德变电站",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [387.17, 4.50, 133.50], "scale": [72.92, 9.00, 48.14], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 41, "name": "bld_442558279", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [882.42, 4.50, 92.96], "scale": [15.02, 9.00, 35.34], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 42, "name": "bld_442558280", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [912.31, 4.50, 98.84], "scale": [29.71, 9.00, 30.55], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 43, "name": "bld_442558285", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [407.45, 4.50, -165.32], "scale": [34.57, 9.00, 21.89], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 44, "name": "bld_442558286", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [693.56, 4.50, -127.68], "scale": [20.19, 9.00, 32.59], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 45, "name": "bld_484548950", "flags": 0, "parent": 0,
+      "label": "猎德祠堂",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [84.19, 4.50, -623.19], "scale": [54.92, 9.00, 83.45], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 46, "name": "bld_490469707", "flags": 0, "parent": 0,
+      "label": "越秀金融中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-727.04, 109.50, 382.64], "scale": [80.77, 219.00, 69.62], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 47, "name": "bld_503814640", "flags": 0, "parent": 0,
+      "label": "珠江新城",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1257.28, 4.50, -131.84], "scale": [110.73, 9.00, 17.41], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 48, "name": "bld_503962038", "flags": 0, "parent": 0,
+      "label": "凌云变电站",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-645.01, 4.50, -527.37], "scale": [56.54, 9.00, 26.76], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 49, "name": "bld_503962045", "flags": 0, "parent": 0,
+      "label": "凯华国际中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-639.43, 79.50, -382.69], "scale": [64.12, 159.00, 93.22], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 50, "name": "bld_503983388", "flags": 0, "parent": 0,
+      "label": "猎德",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-95.49, 4.50, -254.57], "scale": [126.29, 9.00, 27.52], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 51, "name": "bld_503998306", "flags": 0, "parent": 0,
+      "label": "潭村",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1262.02, 4.50, -343.26], "scale": [116.25, 9.00, 20.87], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 52, "name": "bld_505819199", "flags": 0, "parent": 0,
+      "label": "国防大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1075.11, 4.50, 695.85], "scale": [91.75, 9.00, 67.42], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 53, "name": "bld_507573198", "flags": 0, "parent": 0,
+      "label": "嘉裕中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-670.99, 4.50, 232.52], "scale": [120.27, 9.00, 34.54], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 54, "name": "bld_507573199", "flags": 0, "parent": 0,
+      "label": "富力盈通大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1178.51, 67.50, 618.31], "scale": [56.20, 135.00, 38.82], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 55, "name": "bld_507573200", "flags": 0, "parent": 0,
+      "label": "雅居乐中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1182.97, 58.50, 413.00], "scale": [56.77, 117.00, 61.32], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 56, "name": "bld_507573201", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1188.12, 69.00, 265.10], "scale": [54.49, 138.00, 55.84], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 57, "name": "bld_507573202", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1116.40, 7.50, 237.76], "scale": [78.52, 15.00, 100.91], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 58, "name": "bld_507573209", "flags": 0, "parent": 0,
+      "label": "B座",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [155.14, 4.50, 617.57], "scale": [65.63, 9.00, 45.17], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 59, "name": "bld_507573210", "flags": 0, "parent": 0,
+      "label": "A座",
+      "components": {
+      "Model": { "mesh": "city_box_tier2.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [101.99, 37.50, 572.00], "scale": [67.24, 75.00, 44.37], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 60, "name": "bld_507573211", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [57.39, 4.50, 511.99], "scale": [46.16, 9.00, 51.05], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 61, "name": "bld_507573214", "flags": 0, "parent": 0,
+      "label": "奥园大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [411.19, 4.50, 613.89], "scale": [73.82, 9.00, 23.36], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 62, "name": "bld_507573215", "flags": 0, "parent": 0,
+      "label": "维多利酒店",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [339.83, 4.50, 580.81], "scale": [47.60, 9.00, 95.42], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 63, "name": "bld_507584108", "flags": 0, "parent": 0,
+      "label": "高志大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [638.12, 7.50, 575.48], "scale": [108.74, 15.00, 71.86], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 64, "name": "bld_507584110", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [956.90, 4.50, 552.60], "scale": [64.08, 9.00, 41.30], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 65, "name": "bld_507584112", "flags": 0, "parent": 0,
+      "label": "易通大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1192.79, 4.50, 663.15], "scale": [83.38, 9.00, 39.10], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 66, "name": "bld_509631991", "flags": 0, "parent": 0,
+      "label": "省博售票处",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-837.14, 4.50, -653.70], "scale": [6.93, 9.00, 2.48], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 67, "name": "bld_511475343", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-638.61, 4.50, -1019.57], "scale": [35.13, 9.00, 16.49], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 68, "name": "bld_511475344", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-560.56, 4.50, -966.25], "scale": [61.92, 9.00, 9.77], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 69, "name": "bld_511475345", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-561.37, 4.50, -976.65], "scale": [31.39, 9.00, 11.10], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 70, "name": "bld_511475346", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-436.86, 4.50, -1029.52], "scale": [47.98, 9.00, 35.60], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 71, "name": "bld_511475347", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-445.80, 4.50, -1006.08], "scale": [35.58, 9.00, 10.24], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 72, "name": "bld_511475348", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-549.56, 4.50, -1056.33], "scale": [46.22, 9.00, 12.26], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 73, "name": "bld_511475349", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-437.42, 4.50, -980.10], "scale": [54.85, 9.00, 9.45], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 74, "name": "bld_511475350", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-500.61, 4.50, -978.78], "scale": [38.35, 9.00, 9.85], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 75, "name": "bld_511475351", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-500.47, 4.50, -1005.90], "scale": [40.46, 9.00, 11.44], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 76, "name": "bld_511475352", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-500.11, 4.50, -1029.88], "scale": [39.56, 9.00, 10.65], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 77, "name": "bld_513786152", "flags": 0, "parent": 0,
+      "label": "富力盈凯广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1199.62, 148.25, -220.26], "scale": [48.91, 296.50, 50.13], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 78, "name": "bld_515737465", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-215.57, 42.00, -369.29], "scale": [102.93, 84.00, 50.02], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 79, "name": "bld_515737467", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-206.61, 42.00, -288.63], "scale": [116.92, 84.00, 40.38], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 80, "name": "bld_515737468", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-118.01, 42.00, -385.05], "scale": [62.58, 84.00, 31.40], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 81, "name": "bld_515737469", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-83.60, 42.00, -319.47], "scale": [92.77, 84.00, 68.91], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 82, "name": "bld_515737470", "flags": 0, "parent": 0,
+      "label": "优托邦1座",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-363.92, 4.50, -276.69], "scale": [122.12, 9.00, 65.86], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 83, "name": "bld_521222276", "flags": 0, "parent": 0,
+      "label": "广州塔",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1033.79, 4.50, -1561.59], "scale": [25.83, 9.00, 120.69], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 84, "name": "bld_528742612", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [336.04, 4.50, 740.89], "scale": [94.31, 9.00, 28.49], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 85, "name": "bld_528742615", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [598.03, 4.50, 711.21], "scale": [30.31, 9.00, 39.42], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 86, "name": "bld_528742617", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [976.26, 4.50, 677.00], "scale": [57.83, 9.00, 32.38], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 87, "name": "bld_530348909", "flags": 0, "parent": 0,
+      "label": "越秀·财富世纪广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [705.25, 52.50, 461.19], "scale": [133.24, 105.00, 49.29], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 88, "name": "bld_536906826", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [824.69, 4.50, 446.39], "scale": [39.66, 9.00, 35.17], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 89, "name": "bld_539648066", "flags": 0, "parent": 0,
+      "label": "交通服务中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1255.14, 4.50, 722.49], "scale": [16.96, 9.00, 125.04], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 90, "name": "bld_540756768", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-315.76, 4.50, 760.64], "scale": [41.22, 9.00, 18.97], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 91, "name": "bld_540756797", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-172.32, 4.50, 750.74], "scale": [42.01, 9.00, 17.81], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 92, "name": "bld_540756799", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-123.65, 4.50, 761.01], "scale": [30.42, 9.00, 30.46], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 93, "name": "bld_540756800", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-102.04, 4.50, 760.20], "scale": [79.86, 9.00, 40.11], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 94, "name": "bld_540756801", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-84.82, 4.50, 757.95], "scale": [30.43, 9.00, 30.45], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 95, "name": "bld_540760384", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [107.29, 4.50, 745.48], "scale": [21.16, 9.00, 20.90], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 96, "name": "bld_540760385", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [126.86, 4.50, 732.06], "scale": [21.16, 9.00, 20.89], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 97, "name": "bld_540760386", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [149.28, 4.50, 752.55], "scale": [21.16, 9.00, 20.89], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 98, "name": "bld_540760387", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [222.77, 4.50, 751.47], "scale": [40.38, 9.00, 17.72], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 99, "name": "bld_540760388", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [221.86, 4.50, 721.11], "scale": [40.38, 9.00, 17.72], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 100, "name": "bld_540760392", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [187.76, 4.50, 762.05], "scale": [27.20, 9.00, 15.37], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 101, "name": "bld_540760393", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [186.99, 4.50, 733.12], "scale": [27.20, 9.00, 15.37], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 102, "name": "bld_543718202", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-347.96, 4.50, -854.57], "scale": [23.16, 9.00, 11.19], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 103, "name": "bld_543830122", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1179.01, 4.50, 563.06], "scale": [55.22, 9.00, 74.53], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 104, "name": "bld_543830123", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1108.39, 4.50, 431.63], "scale": [34.18, 9.00, 34.02], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 105, "name": "bld_543830126", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-668.38, 4.50, 200.72], "scale": [114.18, 9.00, 29.96], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 106, "name": "bld_543833126", "flags": 0, "parent": 0,
+      "label": "珠水能源大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier2.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [425.04, 33.00, 726.37], "scale": [29.42, 66.00, 34.67], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 107, "name": "bld_543833129", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [854.93, 4.50, 685.21], "scale": [20.35, 9.00, 14.68], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 108, "name": "bld_543833130", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [842.57, 4.50, 675.89], "scale": [21.75, 9.00, 14.19], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 109, "name": "bld_543833131", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1074.88, 4.50, 672.24], "scale": [39.16, 9.00, 20.34], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 110, "name": "bld_544131099", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-500.84, 4.50, -1058.91], "scale": [37.38, 9.00, 11.31], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 111, "name": "bld_544131127", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [490.18, 4.50, -953.04], "scale": [12.70, 9.00, 14.86], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 112, "name": "bld_544813688", "flags": 0, "parent": 0,
+      "label": "广东省旅游局",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [740.41, 4.50, 719.78], "scale": [43.75, 9.00, 25.55], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 113, "name": "bld_545840835", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-145.90, 4.50, -32.23], "scale": [241.47, 9.00, 63.17], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 114, "name": "bld_545840836", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-42.18, 4.50, -151.38], "scale": [19.36, 9.00, 39.11], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 115, "name": "bld_547065944", "flags": 0, "parent": 0,
+      "label": "W酒店",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-498.80, 4.50, 142.84], "scale": [60.56, 9.00, 119.32], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 116, "name": "bld_547065945", "flags": 0, "parent": 0,
+      "label": "广厦国际大厦",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-482.51, 73.50, 233.43], "scale": [44.06, 147.00, 19.46], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 117, "name": "bld_547065947", "flags": 0, "parent": 0,
+      "label": "A2",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-441.93, 48.00, 226.21], "scale": [35.63, 96.00, 26.67], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 118, "name": "bld_547065949", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-465.31, 4.50, -6.48], "scale": [100.50, 9.00, 36.59], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 119, "name": "bld_548652380", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [160.00, 45.00, -654.80], "scale": [73.71, 90.00, 24.67], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 120, "name": "bld_548652780", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [161.70, 45.00, -593.37], "scale": [68.42, 90.00, 23.45], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 121, "name": "bld_548652799", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [163.23, 45.00, -530.75], "scale": [65.50, 90.00, 22.75], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 122, "name": "bld_548653026", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [154.85, 45.00, -724.25], "scale": [102.10, 90.00, 27.59], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 123, "name": "bld_584204634", "flags": 0, "parent": 0,
+      "label": "广州塔",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-914.48, 55.50, -1564.89], "scale": [68.10, 111.00, 68.17], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 124, "name": "bld_585942446", "flags": 0, "parent": 0,
+      "label": "天盈广场东塔",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-80.63, 85.50, -501.25], "scale": [65.76, 171.00, 71.45], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 125, "name": "bld_585942447", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-147.21, 4.50, -560.00], "scale": [64.17, 9.00, 52.10], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 126, "name": "bld_585942448", "flags": 0, "parent": 0,
+      "label": "天盈广场西塔",
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-233.06, 58.50, -494.74], "scale": [74.73, 117.00, 31.05], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 127, "name": "bld_585942449", "flags": 0, "parent": 0,
+      "label": "IGC 天汇广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-160.94, 9.00, -513.25], "scale": [200.03, 18.00, 149.06], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 128, "name": "bld_585942450", "flags": 0, "parent": 0,
+      "label": "广汽中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-330.66, 4.50, -438.89], "scale": [42.49, 9.00, 22.33], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 129, "name": "bld_585942451", "flags": 0, "parent": 0,
+      "label": "广物中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-320.23, 4.50, -525.71], "scale": [23.25, 9.00, 60.33], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 130, "name": "bld_585942452", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier3.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-61.10, 63.00, -711.88], "scale": [86.29, 126.00, 51.35], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 131, "name": "bld_585942453", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier2.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-149.32, 34.50, -744.69], "scale": [62.50, 69.00, 53.27], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 132, "name": "bld_589994627", "flags": 0, "parent": 0,
+      "label": "高德置地冬广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-673.16, 9.00, -58.14], "scale": [131.71, 18.00, 163.60], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 133, "name": "bld_598284386", "flags": 0, "parent": 0,
+      "label": "星辉中心",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [742.16, 4.50, 562.59], "scale": [76.55, 9.00, 78.78], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 134, "name": "bld_616959836", "flags": 0, "parent": 0,
+      "label": "黄埔大道",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-922.65, 4.50, 683.72], "scale": [14.18, 9.00, 41.08], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 135, "name": "bld_620330286", "flags": 0, "parent": 0,
+      "label": "海心沙",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-961.22, 4.50, -976.63], "scale": [16.74, 9.00, 104.54], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 136, "name": "bld_620358651", "flags": 0, "parent": 0,
+      "label": "广州塔",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-996.81, 4.50, -1539.99], "scale": [14.07, 9.00, 41.05], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 137, "name": "bld_640900482", "flags": 0, "parent": 0,
+      "label": "广州日报",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [254.61, 9.00, -1560.62], "scale": [211.17, 18.00, 112.93], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 138, "name": "bld_640900485", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [811.66, 4.50, -1564.09], "scale": [148.24, 9.00, 133.95], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 139, "name": "bld_684901406", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1174.04, 4.50, -77.09], "scale": [31.58, 9.00, 18.27], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 140, "name": "bld_696148764", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-315.38, 4.50, -472.97], "scale": [13.55, 9.00, 45.87], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 141, "name": "bld_696148765", "flags": 0, "parent": 0,
+      "label": "保利中达广场",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-387.62, 4.50, -547.14], "scale": [62.79, 9.00, 24.36], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 142, "name": "bld_696148766", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-449.79, 4.50, -546.16], "scale": [41.00, 9.00, 34.94], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 143, "name": "bld_699180047", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [937.81, 4.50, -1580.34], "scale": [77.84, 9.00, 70.45], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 144, "name": "bld_699180048", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [944.78, 4.50, -1567.15], "scale": [17.26, 9.00, 17.05], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 145, "name": "bld_699687124", "flags": 0, "parent": 0,
+      "label": "腾讯",
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1336.81, 4.50, -1695.54], "scale": [86.31, 9.00, 48.25], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 146, "name": "bld_702262776", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [425.30, 4.50, 756.53], "scale": [29.94, 9.00, 94.98], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 147, "name": "bld_717941983", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1060.63, 4.50, -280.79], "scale": [52.89, 9.00, 61.96], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 148, "name": "bld_719556533", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1165.46, 4.50, 446.86], "scale": [65.96, 9.00, 47.50], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 149, "name": "bld_719556534", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "city_box_tier1.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [1078.84, 4.50, 460.17], "scale": [67.41, 9.00, 38.14], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 150, "name": "bld_735437844", "flags": 0, "parent": 0,
+      "label": "珠江帝景苑",
+      "components": {
+      "Model": { "mesh": "city_box_tier2.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-272.96, 25.50, -1669.96], "scale": [87.61, 51.00, 46.17], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 151, "name": "lm_0", "flags": 0, "parent": 0,
+      "label": "广州塔",
+      "components": {
+      "Model": { "mesh": "canton_tower.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-356.50, 0.00, -1831.99], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 152, "name": "car_00", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "sedan.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-992.04, 0.00, 752.86], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 153, "name": "car_01", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-954.44, 0.00, 645.43], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 154, "name": "car_02", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-862.96, 0.00, -383.14], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 155, "name": "car_03", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-823.64, 0.00, -284.23], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 156, "name": "car_04", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "sedan.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1245.64, 0.00, 32.59], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 157, "name": "car_05", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "taxi.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-1170.51, 0.00, 26.79], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 158, "name": "car_06", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "van.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [73.08, 0.00, 696.76], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } },
+    { "id": 159, "name": "car_07", "flags": 0, "parent": 0,
+      "components": {
+      "Model": { "mesh": "police.glb", "tint": [1.0, 1.0, 1.0] },
+      "Transform": { "position": [-623.45, 0.00, 745.80], "scale": [1.00, 1.00, 1.00], "rotation": [0.0, 0.0, 0.0, 1.0] }
+    } }
+  ]
+}

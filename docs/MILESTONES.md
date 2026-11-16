@@ -4244,4 +4244,12 @@
 - **完成情况**：🟢 DX12+VULKAN 双后端 BUILD OK；selftest 9/9 PASS ×2；全量 ctest 183/183 ×2（citygen 相关 7 项 cg0 六项+cg1-export 全 Passed）；真实 export = 375 节点/417 边/150 box + 广州塔 `lm_0`，PNG 2048×1991 `bldPx=263673 lmPx=256`，city.scene 151 实体、塔位 `[-450.54,0,-1370.7]` scale=1 label=广州塔；**CG0 冻结 5 文件 sha256 全同**（city.scene/top.png/roadnet.json/box.obj/ODbL署名）；`cg0-m0`/`cg1-m0` 两份 run.bat 六段 ALL GREEN；`--only cg1-m0` 8/8 bytes + `--only cg0-m0` 10/10 bytes 双后端 ALL GREEN。
 - **提交版本**：本轮收口 commit（tag `cg1-m0`）。
 - **踩坑**：① **首版 glb 假干净**：单个 HERO 节点 38799 顶点里 13568 个在 0.6~2.8km 外（union-find 连通分量才暴露 4402 个散件），直接整节点导出会带一堆别处道具——必须空间窗裁剪 + 逐面剔除外点；② **`export_yup=False` 让塔沿 Z 躺倒**（glTF 标准高度在 Y），改 `export_yup=True` 后 bounds 才是 Y=[0,620.33]；③ **UE 244m 不是缩放丢失**（四图 Actor scale=1，第三方工程自身艺术缩比），别按「单位错」方向查；④ **三参/四参重载逐字节同构**必须 selftest 硬断言，否则 CG0 冻结产物被悄悄改写；⑤ **俯视画布不扩会把 bbox 外地标裁掉**（广州塔南界外约 155m），金色标记 stats=0 是假绿，`landmarkPixels` 内容锚必拦。
-- **下一步**：引擎侧 `--traffic-city` 消费接线、程序化 facade 贴图（真实照片贴图无源）另排。
+- **下一步**：引擎侧 `--traffic-city` 消费接线已在 M-CG2 立项（用户「按推荐」= A①，2026-11-16 重开 citygen 轨；`docs/citygen/CG2-PLAN.md`）；程序化 facade 贴图已由 W1.1 ambientCG CC0 三档覆盖（标注「真实照片贴图无源」仅指 CG1 自身无源，引擎侧链不缺）。
+
+## CG2 M-CG2 — citygen 产物进引擎（feat/citygen，2026-11-16，tag `cg2-m0`）
+
+- **动作**：用户「继续」→ 开工闸报 2 待拍板/6 已拍板/5 冻结面 → 「按推荐」= Q-CG2A **A**（新增 `scripts/citygen2engine.py`，viewer/core/renderer 零源码改动）+ Q-CG2B **①**（重开 citygen 轨 `claim --force`）。三处证据实读：CITY2ENGINE-GUIDE（W1 范式但不适配 citygen 单共享 box）/ viewer `--traffic-city` 三硬约束（scene.engine + car_* + flat glb 白名单）/ S-PLAN §4 下游 + §5 冻结面。落码：脚本 selftest 59 断言 + drive 真产物 + 双后端 viewer 实跑 + 展示卡。中途 Q-CG2C 用户拍板「双向化最大分量」修真实 OSM 路网碎裂导致的选路失败。
+- **完成情况**：🟢 `citygen2engine.py selftest 59 断言 PASS`（1.9s,网格预索引把证据图从 O(像素×N) 降到 O(1) 查询）；drive 真产物 150 box（tier1=112/tier2=6/tier3=32）+ 广州塔 `lm_0` + 8 car = 159 实体、nextID=160、派生路网 417→260/452 边、44 分量；viewer 双后端 `--traffic-city` rc=0：8 cars/500 lanes/401 lamps/600 tick odometer 496.27m，街景截图肉眼可见建筑窗格贴图+车灯；`cg2-m0/run.bat` 六段 ALL GREEN；`--only cg2-m0` 8/8 bytes ALL GREEN，冻结卡 cg0 10/10、cg1 8/8 ALL GREEN；showcase `--check` exit 0；cg0/cg1 冻结产物零改。
+- **提交版本**：本轮收口 commit（tag `cg2-m0`）。
+- **踩坑**：① **viewer rc=0 假绿**：首轮双后端 rc=0 + 截图 written,但图上纯背景色——citygen 坐标 km 级而 viewer 相机固定盯原点,派生层按节点中位数归一化后才出画;截图必须肉眼核验;② **路网碎裂致选路失败**：375 节点裂 44 弱分量/314 SCC,`TrafficCarSystem` 全池随机选起终点落孤立分量必挂,8 个 seed 全失败排除 seed 因素;派生层保留最大弱分量 + 双向化,源 roadnet 冻结零改;③ **nextID 语义**：E1 `nextID` = 下一个空闲 id,car 应从 `old_next` 起占、`nextID` 加 count,不是从 `old_next+count` 起;④ **selftest e2e 双跑 >120s** 被默认超时杀,双跑逐字节移到 run.bat seg2;⑤ **bat `%~dp0` 带尾斜杠**：拼子路径必须 `%ROOT%\assets`,写成 `%ROOT%assets` 的 `if exist` 静默失败;⑥ **bash 命令含 `PowerShell` 字样**被安全策略误拦,归档改用 Edit 工具。
+- **下一步**：全城 V4 流送（P9 第 10 步）、多地标 whitelist 扩容与真实立面贴图质量复评；本轮只做珠江新城区域试水 + 广州塔单体。

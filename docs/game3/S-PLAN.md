@@ -38,7 +38,7 @@
 |---|---|---|
 | **M-CG0** | citygen 库骨架 + OSM 输入源(Overpass JSON 解析 → 区域路网 roadnet.json + 建筑块 city.scene + 俯视 PNG + CLI 壳),区域试水范围 | `docs/citygen/CG0-PLAN.md` |
 | M-CG1+ | 程序化规格网输入源迁入库(与 city-tools 对齐)、车道数 >1(多车道前提)、行人路网(人行道 navmesh,归属届时拍板)、地块密度/POI | 待 M-CG0 收官后立项 |
-| 下游 | OSM 城市接 city2engine → viewer 驾驶(GAME-DEV-ORDER 第 7 步口径) | 届时出计划 |
+| 下游 | OSM 城市接 city2engine → viewer 驾驶(GAME-DEV-ORDER 第 7 步口径) | **M-CG2 已立项**(2026-11-16 用户「按推荐」A①,`docs/citygen/CG2-PLAN.md`):新增 `scripts/citygen2engine.py` 只读派生,viewer 零改动 |
 
 ## 5. 冻结面
 
