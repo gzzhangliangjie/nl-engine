@@ -419,7 +419,7 @@ TRACKS = {
     },
     "game": {
         "wt": "E:/UE_STUDY_2026/nl-engine-game",
-        "branch": "feat/game", "state": "planned",
+        "branch": "feat/game", "state": "active",
         "note": "Game 3 (Guangzhou map) GAME-DEV-ORDER step 7, user approved "
                 "2026-11-16: minimum playable = standalone game.exe with "
                 "player vehicle driving inside the CG2 Zhujiang New Town "
