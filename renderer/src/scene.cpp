@@ -6302,7 +6302,7 @@ bool Scene::runCityGi(nvrhi::ICommandList* cmd, const FrameParams& params,
         gcb[23] = 8.0f;
         gcb[24] = 0.45f; gcb[25] = 0.39f; gcb[26] = 0.30f;
         gcb[27] = 0.01f;
-        gcb[28] = 20.0f; gcb[29] = 50.0f; gcb[30] = 120.0f;  // Q13-1 城市尺度分段
+        gcb[28] = 40.0f; gcb[29] = 120.0f; gcb[30] = 300.0f;  // Q13-1 城市尺度分段（首版 {20,50,120} 在 dist 200+ 机位下全落 L3 出马赛克）
         gcb[31] = 0.0f;                                      // skyBg 关（城市天穹 pass 直出）
         gcb[32] = params.weatherZenith[0]; gcb[33] = params.weatherZenith[1];
         gcb[34] = params.weatherZenith[2];

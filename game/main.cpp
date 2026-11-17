@@ -90,6 +90,7 @@ struct Options {
     bool audioRealtime = false;
     std::string city = "example/cg2-m0";
     std::string cityScene;        // resolved city/city.scene.engine
+    std::string citySceneName = "city.scene.engine";  // --city-scene override
     std::string playScript;       // optional frame-script file
     std::string screenshot;
     int screenshotFrame = -1;     // which rendered frame writes the PNG (-1 = last)
@@ -147,6 +148,8 @@ int parseArgs(int argc, char** argv, Options* o) {
         else if (a == "--no-hud") o->noHud = true;
         else if (a == "--audio-realtime") o->audioRealtime = true;
         else if (a == "--city") { if (!need("--city", &o->city)) return 2; }
+        else if (a == "--city-scene") {   // M-CITY-DENS: override scene file name
+            if (!need("--city-scene", &o->citySceneName)) return 2; }
         else if (a == "--screenshot") { if (!need("--screenshot", &o->screenshot)) return 2; }
         else if (a == "--screenshot-frame") {
             std::string v; if (!need("--screenshot-frame", &v)) return 2;
@@ -682,7 +685,7 @@ struct Feedback {
 int runGame(const Options& o) {
     // Resolve scene path.
     Options resolved = o;
-    resolved.cityScene = (std::filesystem::path(o.city) / "city.scene.engine").generic_string();
+    resolved.cityScene = (std::filesystem::path(o.city) / o.citySceneName).generic_string();
     {
         std::error_code ec;
         if (!std::filesystem::is_regular_file(resolved.cityScene, ec) || ec) {
