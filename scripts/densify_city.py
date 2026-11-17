@@ -132,6 +132,20 @@ def quat_yaw(yaw: float) -> list[float]:
     return [0.0, math.sin(yaw / 2.0), 0.0, math.cos(yaw / 2.0)]
 
 
+def quat_pitch_yaw(yaw: float, pitch: float) -> list[float]:
+    """M-RD-RAMP: yaw（绕世界 Y）+ pitch（绕局部 Z，正角 = 沿行进方向翘起）。
+
+    q = q_yaw ⊗ q_pitch（先局部 pitch 再世界 yaw），展开后四分量只含
+    sy/cy/sp/cp 的乘积——pitch=0 时逐位退化为 quat_yaw(yaw)（乘 1.0/0.0
+    浮点精确），因此同层 slab 的 rotation 字节不变，既有基线零漂。
+    引擎 quatToMat4（math.hpp, glm 同款右手系）已验证三锚点：
+    pitch=0 退化 / yaw=0 纯 pitch / yaw=pitch=90°。
+    """
+    sy, cy = math.sin(yaw / 2.0), math.cos(yaw / 2.0)
+    sp, cp = math.sin(pitch / 2.0), math.cos(pitch / 2.0)
+    return [sy * sp, sy * cp, cy * sp, cy * cp]
+
+
 def tier_for(h: float) -> str:
     if h < 24.0:
         return "city_box_tier1.glb"

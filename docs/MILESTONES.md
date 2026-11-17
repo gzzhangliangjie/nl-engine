@@ -4329,3 +4329,16 @@
   ③ SUMO 生态同类坑（上海高架实战帖）：匝道漏标 layer 或上游共享节点 → 车流「凭空从高架跳地面」，业界也只能靠人工检查——我们的端点吸附是替代手段，**6 对重合节点没接上 connector**属已知残差。
 - **挂账**：**M-RD-RAMP**（匝道倾斜几何：当前跨层边不铺 slab，且 `quat_yaw` 只有 yaw 没有 pitch）；**M-RD-RENDER**（桥墩/箱梁/护栏——0.12 m 薄板从侧视看不出高差，实测把桥面加厚到 1.6 m 才可见）；信号按 lanelet2 的「灯→停止线→受控车道」链式关联重做（当前是整口设灯）。
 
+### 2026-11-17 M-RD-RAMP：跨层匝道 pitch 几何管线（tag `ramp-m0`）
+
+> 用户拍板 A（AskUserQuestion 四选一）。同轮拍板：**全广州扩展需要海拔支持** → 立项 M-DEM0（SRTM/Copernicus 30m DEM 数据链 + 路网 y=DEM+layer*7 贴合 + 地形渲染面 heightmap+Jolt HeightFieldShape，pitch 管线是其前置）。
+
+- **提交版本**：feat/game，tag `ramp-m0`。
+- **修改文件清单**：`scripts/densify_city.py`（新增 `quat_pitch_yaw`）、`scripts/real_city.py`（slab 循环 3D 弧长 + pitch 坡面板 + 最小平面长度门槛 30 m + `ramps` 统计 + selftest 三断言）。**core/renderer 零改**（`quatToMat4`/`mat4TRS` 既有能力，R\*S 列乘 M-DEPTH0 已修正是本里程碑前提）。
+- **数学**：`quat_pitch_yaw(yaw,pitch) = [sy·sp, sy·cp, cy·sp, cy·cp]`（q = q_yaw ⊗ q_pitch，pitch 绕局部 Z 正角 = 沿行进方向翘起）；三锚点验证 pitch=0 逐位退化为 `quat_yaw`（乘 1.0/0.0 浮点精确 → 同层 slab rotation 字节不变）。弧长改 3D `hypot(dx,dz,dy)`（dy=0 时正确舍入逐位等于旧平面值）。引擎侧三锚点（pitch=0 / yaw=0 / yaw=pitch=90°）与 glm 右手系 `quatToMat4` 对拍通过。
+- **门槛**：跨层段铺坡面板要求**平面长度 ≥30 m**（最大坡 ≈13°）；更陡一律跳过（`ramp_skipped`），宁悬空不铺垂直墙。真实道路纵坡 ≤8%（7 m 层高需 ≥90 m 引桥）。
+- **数据调查（本轮核心发现）**：M-RD-LAYER 的 762 条跨层 connector **全部平面长度 ≤9 m（中位数 0.0 m，平面重合）**——OSM layer 是 way 级标签，引桥段通常也被标 bridge（整条匝道 layer=1），层间落差被压进端点。铺板实测（无门槛时）42 块 pitch 38°~86°，物理不可能。**延长线锥内（±45°、30~90 m）找落地节点：0/481 命中**；外延 60 m 吸附 15 m 内地面节点：84/481（17.5%）——试水区路网密度撑不起任何造坡方案。
+- **结果**：真实场景输出与 M-RD-LAYER 收口版**逐位一致**（`city.scene.real.engine` sha256 相同，15273 实体）→ 基线零漂、无新 PNG。坡面能力就绪、真实数据无生效对象，等全广州 OSM / M-DEM0 提供真实匝道几何后门槛自动放行。
+- **门**：`real_city selftest` PASS（坡面铺设 50m/7m→pitch=atan2(7,50)、同层零漂、10m/7m 短陡段跳过）；`--only game-m2` 6/6 bytes ALL GREEN。
+- **挂账**：**connector 几何真实化并入 M-DEM0**（真实引桥几何需要更全 OSM 匝道数据/DEM，重合 connector 的车体垂直瞬变同样挂此）；M-RD-RENDER（桥墩/箱梁）不变；信号链式关联不变。
+

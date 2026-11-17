@@ -44,7 +44,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from densify_city import height_mix, quat_yaw, tier_for  # noqa: E402
+from densify_city import height_mix, quat_pitch_yaw, quat_yaw, tier_for  # noqa: E402
 
 USAGE = """real_city - M-CITY-OSM pure real-OSM buildings
 usage:
@@ -383,7 +383,7 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
 
     stats = {"osm_input": len(ways), "real_added": 0, "dup_scene": 0,
              "infill": 0, "skipped_overlap": 0, "skipped_tiny": 0, "roads": 0,
-             "signals": 0, "calib_pairs": len(pairs)}
+             "ramps": 0, "signals": 0, "calib_pairs": len(pairs)}
 
     # --- (1) real OSM buildings (sorted by way id -> deterministic) ---
     for w in ways:
@@ -524,15 +524,23 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
             x1, y1, z1 = pts[si + 1]
             dx = x1 - x0
             dz = z1 - z0
-            length = math.hypot(dx, dz)
+            dy = y1 - y0
+            # M-RD-RAMP：3D 弧长——跨层 connector（dy≠0）铺坡面板后，分段
+            # 与板长都沿斜面计量。同层 dy==0 时 hypot(dx,dz,0.0) 逐位等于
+            # 旧 hypot(dx,dz)（Python hypot 正确舍入），既有基线零漂。
+            length = math.hypot(dx, dz, dy)
             if length < 0.6:
                 continue
-            # M-RD-LAYER：跨层匝道（两端高程差 > 0.5 m，即桥头 connector）本轮
-            # 不铺水平板——它需要 pitch 倾斜几何，挂 M-RD-RAMP。桥面本体和
-            # 地面路段照铺，各自落在自己那层的高度上。
-            if abs(y1 - y0) > 0.5:
+            # M-RD-RAMP：跨层段铺 pitch 倾斜坡面板，但设最小平面长度门槛：
+            # 7 m 层高差在 <30 m 平面距离内爬完 = 坡度 >13°，物理不可能
+            # （真实匝道纵坡 ≤8%，需 ≥90 m 引桥）。实测 M-RD-LAYER 的 9 m
+            # connector 全部平面重合（762 条中位 0.0 m），铺出来是垂直墙；
+            # 短陡段一律跳过（车由 LaneGraph y 插值驱动，宁悬空不铺墙），
+            # 等全广州 OSM / M-DEM0 带来真实匝道几何后门槛自动放行。
+            if abs(dy) > 0.5 and math.hypot(dx, dz) < 30.0:
                 stats["ramp_skipped"] = stats.get("ramp_skipped", 0) + 1
                 continue
+            pitch = math.atan2(dy, math.hypot(dx, dz)) if abs(dy) > 0.5 else 0.0
             # M-CITY-ROAD: cap per-slab length. A 1.1 km straight artery slab has
             # a 158:1 aspect ratio and renders as a bright aliased streak at
             # distance (measured: 361 slabs > 200 m produced white noise in the
@@ -545,10 +553,13 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
                 pz0 = z0 + dz * t0
                 px1 = x0 + dx * (t0 + 1.0 / nsub)
                 pz1 = z0 + dz * (t0 + 1.0 / nsub)
+                py0 = y0 + dy * t0
+                py1 = y0 + dy * (t0 + 1.0 / nsub)
                 yaw = math.atan2(-(pz1 - pz0), px1 - px0)
-                # 高程：同层取该层高度（桥面 7.05，地面 0.05），保留原来的
-                # 6 mm 抖动以免相邻 slab 完全共面。
-                slab_y = (y0 + y1) * 0.5 + 0.05 + ((e["id"] * 7 + si * 3 + k) % 7) * 0.006
+                # 高程：段内线性坡的中点高程（车体由 LaneGraph 同一线性插值
+                # 驱动，两者贴合），同层仍取层高 + 6 mm 抖动以免相邻 slab
+                # 完全共面。
+                slab_y = (py0 + py1) * 0.5 + 0.05 + ((e["id"] * 7 + si * 3 + k) % 7) * 0.006
                 extra = w if (segs == 1 and nsub == 1) else min(w, max(2.0, sub * 0.5))
                 entities.append({
                     "id": next_id, "name": f"road_{e['id']}"
@@ -562,10 +573,13 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
                                          round(slab_y, 3),
                                          round((pz0 + pz1) / 2, 2)],
                             "scale": [round(sub + extra, 2), 0.12, round(w, 2)],
-                            "rotation": quat_yaw(yaw),
+                            "rotation": (quat_pitch_yaw(yaw, pitch)
+                                         if pitch != 0.0 else quat_yaw(yaw)),
                         },
                     },
                 })
+                if pitch != 0.0:
+                    stats["ramps"] += 1
                 next_id += 1
                 stats["roads"] += 1
 
@@ -714,6 +728,52 @@ def selftest() -> int:
         # slab splitting means a 100 m fixture edge may become 2 slabs
         assert kinds.get("road", 0) >= 1 and kinds.get("sigpole") == 1, kinds
         assert kinds.get("infill", 0) > 0, kinds
+        # M-RD-RAMP: same-layer slabs keep quat_yaw (zero drift guard).
+        for e in d["entities"]:
+            if e["name"].startswith("road_"):
+                q4 = e["components"]["Transform"]["rotation"]
+                assert q4 == quat_yaw(0.0), q4
+        # M-RD-RAMP: a cross-layer connector lays a pitched ramp slab
+        # (50 m run, 7 m layer rise -> pitch = atan2(7, 50), single slab
+        # since 3D length 50.49 < slab_max 60).
+        roadnet2 = {
+            "nodes": [{"id": 0, "x": -25.0, "z": 0.0, "y": 0.0,
+                       "kind": "intersection", "signal": False},
+                      {"id": 1, "x": 25.0, "z": 0.0, "y": 7.0,
+                       "kind": "intersection", "signal": False}],
+            "edges": [{"id": 0, "from": 0, "to": 1, "lanes_per_dir": 1,
+                       "speed_limit": 13.9, "width": 8.0}],
+        }
+        rp2 = td / "r2.json"
+        rp2.write_text(json.dumps(roadnet2), encoding="utf-8")
+        o3 = td / "o3.scene"
+        s3 = build_city(sp, rp2, [qp], o3, 20260717)
+        assert s3["ramps"] == 1, s3
+        d3 = json.loads(o3.read_bytes().decode("utf-8"))
+        ramp = [e for e in d3["entities"] if e["name"].startswith("road_")]
+        assert len(ramp) == 1, [e["name"] for e in ramp]
+        tr3 = ramp[0]["components"]["Transform"]
+        exp3 = quat_pitch_yaw(0.0, math.atan2(7.0, 50.0))
+        assert tr3["rotation"] == exp3, (tr3["rotation"], exp3)
+        assert abs(tr3["position"][1] - 3.55) < 1e-6, tr3
+        assert abs(tr3["scale"][0] - (math.hypot(50.0, 7.0) + 8.0)) < 0.01, tr3
+        # M-RD-RAMP: a near-vertical segment (10 m run, 7 m rise -> >35 deg)
+        # is skipped, not laid as a wall.
+        roadnet3 = {
+            "nodes": [{"id": 0, "x": -5.0, "z": 0.0, "y": 0.0,
+                       "kind": "intersection", "signal": False},
+                      {"id": 1, "x": 5.0, "z": 0.0, "y": 7.0,
+                       "kind": "intersection", "signal": False}],
+            "edges": [{"id": 0, "from": 0, "to": 1, "lanes_per_dir": 1,
+                       "speed_limit": 13.9, "width": 8.0}],
+        }
+        rp3 = td / "r3.json"
+        rp3.write_text(json.dumps(roadnet3), encoding="utf-8")
+        o4 = td / "o4.scene"
+        s4 = build_city(sp, rp3, [qp], o4, 20260717)
+        assert s4["ramp_skipped"] == 1, s4
+        d4 = json.loads(o4.read_bytes().decode("utf-8"))
+        assert not [e for e in d4["entities"] if e["name"].startswith("road_")]
         print(f"real_city selftest: PASS (stats={s1})")
     return 0
 
