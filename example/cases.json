@@ -16181,9 +16181,9 @@
      },
      "args": [
       "--city",
+      "{root}/example/cg2-m0",
       "--city-scene",
       "city.scene.engine",
-      "{root}/example/cg2-m0",
       "--screenshot",
       "{out}",
       "--screenshot-frame",
@@ -16267,9 +16267,9 @@
      },
      "args": [
       "--city",
+      "{root}/example/cg2-m0",
       "--city-scene",
       "city.scene.engine",
-      "{root}/example/cg2-m0",
       "--traffic",
       "1",
       "--cam",

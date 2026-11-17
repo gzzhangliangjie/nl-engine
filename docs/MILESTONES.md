@@ -4269,3 +4269,25 @@
 - **提交版本**：收口 commit（tag `game-m1`），feat/game 已推远端。
 - **踩坑**：① **两套中位数口径**：citygen2engine 派生层把 scene+roadnet 按路网节点中位数归一到原点，而 game 的 addCityCollision 再按 box 中位数平移——AI 车/灯的 roadnet 系坐标必须再减 cityCenter 才与楼/物理对齐，渲染同步逐帧减 shift；② **meshFiles c_str 悬垂**：desc.meshFile 存 c_str()，后续 push_back realloc 会悬垂全部旧指针——loadCity 收集前 `reserve(256)` 一劳永逸；③ **release --done 会释放 claim**（busy 文件 state 回 planned + feat/game 分支上 tools/wt_pool.py 注册表同步回 planned）——下一里程碑开工须重 claim 且 **worktree 先 merge master**（c6f4d06 的 active 修复在 master 上，worktree 落后即报 not active）；④ **CG2 夜景暗城可见度口径**：ambient 0.28 无光源 + 8 车 km 级稀疏，「肉眼可见车流」不可达（灯 tint×ambient ≈ 0.24，贴地 40m 才见绿点）——按 cg2-m0 viewer 同级口径（灯色点+数值锚）验收，车体可见性（尾灯自发光）立项 M-GAME2；⑤ wt.bat build 缺省只 DX12，VULKAN 须显式 `build VULKAN`。
 - **下一步**：M-GAME2 候选——AI 车体物理化（kinematic body + 玩家撞击事件）/ 车尾灯自发光可见性 / 驾驶手感（VehicleConstraint cvar 实调）；GAME-DEV-ORDER 第 9 步调度器已由交通轨覆盖。
+
+## GAME M-CITY-ROAD — 真实 OSM 路网进引擎：路网 / 寻路 / 信号 / 路面（feat/game，2026-11-17，tag `road-m0`）
+
+- **动作**：用户「真实路网」→「要跟寻路网格结合起来 支持寻路」→「立交桥这种立体交通能做么」→「构建完 再排期制作」→「路网搭建网上有没有一些比较成熟的方案」。三条落码线：① `scripts/real_roadnet.py`（BusViewer 64 分片 highway `out:geom` → 引擎 roadnet.json：节点量化 0.5m / 最大弱分量 / 度数压缩 / 双向化 / OSM 折线 `shape` / `signal` 标记 / `--respect-oneway` 可退回单向）；② core `LaneGraph`（折线 shape + 顶点 miter 法线偏移、O(E) 连接表替代 O(n²) 全扫、**死胡同掉头**例外、新增 `findNearestLane`/`laneDistanceTo` 供坐标吸附）；③ `scripts/real_city.py`（折线路面按 `slab_max=60m` 细分 slab、infill 圈定真楼 bbox 内不再外扩）。
+- **完成情况**：🟢
+  - 路网：**2752 节点 / 7862 有向边**（3931 物理边 ×2 双向）/ **71** 个 OSM 真实信号节点 / 4888 边带折线 shape；**强连通 = 全图**（正向 2752 + 反向 2752 双向可达，SCC=1）。
+  - 车道图：**11074 lanes / 37651 outgoing links / 弧长合计 1349.4 km** / `offset max 6.667 m`。
+  - 寻路：`traffic-tools path --from-xz/--to-xz`（300m 内最近车道吸附）实测 珠江新城 (-1047,-322) → 琶洲东 (2800,-1200) = **41 跳 / 5263.1 m**。
+  - 场景：`city.scene.real.engine` **14257 实体** = 11533 路面 slab + 2573 楼（tier1 1502 / tier2 699 / tier3 372）+ 142 信号杆件 + 广州塔 + 8 车。
+  - game.exe：`--roadnet` / `--signals auto|osm`；`--signals osm` → **240 盏灯**（auto 口径把 2295 个路口全设灯 = 7405 盏，实测异常）。双后端车流逐位一致：`cars=8 lamps=240 ticks=240 odometer=125.61 arrived=0`；同场景 960×540 双后端截图仅 1 px 差 ±1 LSB。
+  - 门：**ctest 184/184 双后端**；regression `game-m0` 6/6、`game-m1` 6/6、`cg2-m0` 8/8 全 bytes ALL GREEN。
+- **提交版本**：本轮收口 commit（tag `road-m0`）。`World` 上未接线的 M-GAME2 kinematic 车脚手架已 stash 出本轮（`stash@{0}`），不混入里程碑。
+- **踩坑**：
+  ① **有向图全锁死**：初版严格按 OSM oneway 建边，3931 条边**零反向孪生** → A* 连起点边都出不去（Python 复算 100% 不可达）；只做双向化仍不够（单向路把图切成 9.4% 的碎块）。最终解 = 默认全双向 + **死胡同掉头**（目标节点除回头路外无出边才放行）→ SCC=1。`--respect-oneway` 保留原始语义入口。
+  ② **cases.json 参数错位自伤**：12:08 那次把 `--city-scene city.scene.engine` 插在 `--city` **后面**，`--city` 把 `--city-scene` 当自己的值吞掉、真路径变成未知选项 → game-m0/m1 街景卡从此 exit 2（回归 4/6 假红，直到本轮才发现）。教训：改 cases.json 的参数数组必须实跑一次那张卡。
+  ③ **航拍白噪点不是"实例上限"**：`triangles=52740` 不随 `objects` 从 10245→14499 增长是**实例化几何去重**的正常语义（`triangleCount_` = 各 batch 唯一几何之和）。真因是**深度精度**：`kNear=0.1` / `far=max(100,dist*3)` 标准 Z，2600m 处深度分辨率量级 ≈0.4m，而路面 slab 只有 0.12m 厚 → 与地面/相邻 slab 全场 z-fight，航拍片上路面碎成白虚线；同场景 250m 处连续完整（对照实证）；**平板对照**（把 11533 块 slab 的 y 全改成 0.05 重渲染）症状一像素不变，排除 6mm y 错位嫌疑。
+  ④ **ground 平面缩水**：`span*0.6+100` 是 150 box 时代遗留（半个 bbox），6.7km 路网会露出硬切边 → 改 1.2× 全跨。
+  ⑤ **VULKAN 假红**：改 core/tools 后只重编 DX12 就跑 VULKAN ctest → m-t0-traffic 两卡失败（VULKAN 侧 exe 陈旧）。两后端都要重编再跑。
+  ⑥ **`--only` 不支持叠加**：`regression --only A --only B` 只有**最后一个**生效（实测 8 runs 全是 cg2-m0），要分次跑。
+  ⑦ **全量回归在本 worktree 不可用**：`build/showcase/<tag>/` 历史快照没建，138 卡报「exe 缺失」——不是本轮回归问题，收口用 ctest + 当前轨道卡。
+- **下一步**：**立交桥/立体交通**（用户已定「构建完再排期」）：数据层节点加 `layer`、`LanePoint` 加 y、渲染加桥墩/护栏；**深度精度轨**（候选 M-DEPTH0：距离自适应 near 或 reverse-Z，6.7km 级城市航拍/远景的硬前提）；M-GAME2 候选（kinematic 车体 + 尾灯）不变。
+

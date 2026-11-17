@@ -91,6 +91,11 @@ struct Options {
     std::string city = "example/cg2-m0";
     std::string cityScene;        // resolved city/city.scene.engine
     std::string citySceneName = "city.scene.real.engine";  // --city-scene override
+    std::string roadnetName = "roadnet.json";              // --roadnet override
+    // M-CITY-ROAD: "auto" = every controlled junction gets a signal (M-GAME1
+    // convention, keeps game-m0/m1 baselines intact); "osm" = only junctions
+    // OSM marks with traffic_signals (real roadnet: 71 of 2295 junctions).
+    std::string signalsMode = "auto";                      // --signals
     std::string playScript;       // optional frame-script file
     std::string screenshot;
     int screenshotFrame = -1;     // which rendered frame writes the PNG (-1 = last)
@@ -150,6 +155,11 @@ int parseArgs(int argc, char** argv, Options* o) {
         else if (a == "--city") { if (!need("--city", &o->city)) return 2; }
         else if (a == "--city-scene") {   // M-CITY-DENS: override scene file name
             if (!need("--city-scene", &o->citySceneName)) return 2; }
+        else if (a == "--roadnet") {      // M-CITY-ROAD: override roadnet file name
+            if (!need("--roadnet", &o->roadnetName)) return 2; }
+        else if (a == "--signals") {      // M-CITY-ROAD: auto | osm
+            if (!need("--signals", &o->signalsMode)) return 2;
+            if (o->signalsMode != "auto" && o->signalsMode != "osm") return 2; }
         else if (a == "--screenshot") { if (!need("--screenshot", &o->screenshot)) return 2; }
         else if (a == "--screenshot-frame") {
             std::string v; if (!need("--screenshot-frame", &v)) return 2;
@@ -409,8 +419,11 @@ bool loadCity(const Options& o, CityScene* cs, std::string* err) {
         }
         if (any) {
             const float cx = (minx + maxx) * 0.5f, cz = (minz + maxz) * 0.5f;
-            const float w = (maxx - minx) * 0.6f + 100.0f;
-            const float dpt = (maxz - minz) * 0.6f + 100.0f;
+            // M-CITY-ROAD: 1.2x span (was 0.6x = *half* the bbox, a leftover of
+            // the 150-box training-ground era) — a 6.7 km real roadnet poked out
+            // past the slab edge and left a hard diagonal cut in aerials.
+            const float w = (maxx - minx) * 1.2f + 100.0f;
+            const float dpt = (maxz - minz) * 1.2f + 100.0f;
             cs->meshFiles.push_back(cs->meshFiles.front());  // shared box mesh
             nl::renderer::SceneObjectDesc g{};
             // Column-major T*S: scale (w,2,dpt) then translate (cx,-1,cz).
@@ -460,8 +473,10 @@ bool setupTraffic(const Options& o, CityScene* cs, std::string* err) {
         cs->world.findSystem(nl::traffic::TrafficCarSystem::kName));
 
     // roadnet.json lives next to city.scene.engine (citygen interface output).
+    // --roadnet picks a different file name in the same city dir (M-CITY-ROAD:
+    // roadnet.real.json = real OSM topology).
     const std::string roadnetPath =
-        (std::filesystem::path(o.city) / "roadnet.json").generic_string();
+        (std::filesystem::path(o.city) / o.roadnetName).generic_string();
     std::ifstream rf(roadnetPath, std::ios::binary);
     if (!rf) { *err = "traffic: cannot open " + roadnetPath; return false; }
     std::string jsonBytes((std::istreambuf_iterator<char>(rf)),
@@ -481,7 +496,8 @@ bool setupTraffic(const Options& o, CityScene* cs, std::string* err) {
         return false;
     }
     // Signal phases + lamp entities (M-T4 parity with viewer --traffic-city).
-    if (!sys->initControl(jsonBytes.data(), jsonBytes.size(), true, ierr)) {
+    const bool autoSignal = (o.signalsMode == "auto");
+    if (!sys->initControl(jsonBytes.data(), jsonBytes.size(), autoSignal, ierr)) {
         *err = "traffic: control init failed: " + ierr;
         return false;
     }

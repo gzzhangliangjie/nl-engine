@@ -26,9 +26,21 @@ struct RoadEdgeRec {
     int32_t lanesPerDir = 1;
     float speedLimit = 0.0f;
     float width = 0.0f;
+    // 可选折线（scene x/z，含首尾；M-CITY-ROAD）：真实 OSM 路网的 shape。
+    // 空 = 直线边（旧口径，2 点 lane，逐位保形）。
+    std::vector<LanePoint> shape;
 };
 
 bool isFinite(float v) { return std::isfinite(v) != 0; }
+
+// 单位方向 a->b
+LanePoint unitDir(const LanePoint& a, const LanePoint& b) {
+    const float dx = b.x - a.x;
+    const float dz = b.z - a.z;
+    const float l = std::sqrt(dx * dx + dz * dz);
+    if (!(l > 0.0f)) return LanePoint{0.0f, 0.0f};
+    return LanePoint{dx / l, dz / l};
+}
 
 } // namespace
 
@@ -126,6 +138,43 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
                 if (err) *err = "width/speed_limit must be positive";
                 return false;
             }
+            // 可选折线形状：[[x,z], ...]。端点必须与引用节点吻合（<=1 m），
+            // 否则视为脏数据静默回退直线边（不失败：形状是装饰性的）。
+            if (e.contains("shape")) {
+                if (!e["shape"].is_array()) {
+                    if (err) *err = "edge shape must be an array";
+                    return false;
+                }
+                bool ok = true;
+                std::vector<LanePoint> sh;
+                for (const auto& p : e["shape"]) {
+                    if (!p.is_array() || p.size() != 2 || !p[0].is_number() ||
+                        !p[1].is_number()) {
+                        ok = false;
+                        break;
+                    }
+                    const float sx = p[0].get<float>();
+                    const float sz = p[1].get<float>();
+                    if (!isFinite(sx) || !isFinite(sz)) {
+                        ok = false;
+                        break;
+                    }
+                    sh.push_back(LanePoint{sx, sz});
+                }
+                if (!ok) {
+                    if (err) *err = "edge shape point must be [x,z] numbers";
+                    return false;
+                }
+                if (sh.size() >= 2) {
+                    const LanePoint pa = nodePos[rec.from];
+                    const LanePoint pb = nodePos[rec.to];
+                    const float d0 = std::sqrt((sh.front().x - pa.x) * (sh.front().x - pa.x) +
+                                               (sh.front().z - pa.z) * (sh.front().z - pa.z));
+                    const float d1 = std::sqrt((sh.back().x - pb.x) * (sh.back().x - pb.x) +
+                                               (sh.back().z - pb.z) * (sh.back().z - pb.z));
+                    if (d0 <= 1.0f && d1 <= 1.0f) rec.shape = std::move(sh);
+                }
+            }
             if (!edgeIds.emplace(rec.id, edges.size()).second) {
                 if (err) *err = "duplicate edge id";
                 return false;
@@ -140,18 +189,45 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
     std::vector<int32_t> edgeFirstLane(edges.size(), -1); // edge -> 首条 lane 下标
     for (size_t ei = 0; ei < edges.size(); ++ei) {
         const RoadEdgeRec& e = edges[ei];
+        // 折线 = 真实 shape（M-CITY-ROAD）或两点直线（旧口径）。两点时下面的
+        // miter 退化为「单一 right 向量」，与旧实现逐位等价。
         const LanePoint a = nodePos[e.from];
         const LanePoint b = nodePos[e.to];
-        const float dx = b.x - a.x;
-        const float dz = b.z - a.z;
-        const float segLen = std::sqrt(dx * dx + dz * dz);
-        if (!(segLen > 0.0f)) {
+        std::vector<LanePoint> poly;
+        poly.reserve(e.shape.size() >= 2 ? e.shape.size() : 2);
+        if (e.shape.size() >= 2) poly = e.shape;
+        else { poly.push_back(a); poly.push_back(b); }
+        const size_t np = poly.size();
+        // 顶点法线：端点用本段方向；内部点用相邻段方向的平均（miter），
+        // 使偏移边在拐点连续（否则车道折线会在路口断开）。
+        std::vector<LanePoint> nrm(np);
+        float polyLen = 0.0f;
+        for (size_t i = 0; i + 1 < np; ++i) {
+            const float dx = poly[i + 1].x - poly[i].x;
+            const float dz = poly[i + 1].z - poly[i].z;
+            const float seg = std::sqrt(dx * dx + dz * dz);
+            polyLen += seg;
+            const LanePoint d = unitDir(poly[i], poly[i + 1]);
+            const LanePoint r = rightOf(d.x, d.z);
+            if (i == 0) nrm[0] = r;
+            nrm[i + 1] = r;
+        }
+        for (size_t i = 1; i + 1 < np; ++i) {
+            const LanePoint d0 = unitDir(poly[i - 1], poly[i]);
+            const LanePoint d1 = unitDir(poly[i], poly[i + 1]);
+            float mx = d0.x + d1.x;
+            float mz = d0.z + d1.z;
+            const float ml = std::sqrt(mx * mx + mz * mz);
+            if (ml > 1e-6f) {
+                mx /= ml;
+                mz /= ml;
+                nrm[i] = rightOf(mx, mz);   // ml≈0（原路折返）时保留前段法线
+            }
+        }
+        if (!(polyLen > 0.0f)) {
             if (err) *err = "degenerate edge (zero length)";
             return false;
         }
-        const float fx = dx / segLen;
-        const float fz = dz / segLen;
-        const LanePoint right = rightOf(fx, fz);
         const float halfW = e.width * 0.5f;
         const float laneW = halfW / static_cast<float>(e.lanesPerDir);
         edgeFirstLane[ei] = static_cast<int32_t>(out->lanes.size());
@@ -164,30 +240,58 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
             lane.laneIndex = li;
             lane.speedLimit = e.speedLimit;
             lane.offset = halfW - (static_cast<float>(li) + 0.5f) * laneW;
-            lane.length = segLen;
-            // 折线 = [from + right*off, to + right*off]，点序 = 行进方向
-            lane.points.push_back(LanePoint{a.x + right.x * lane.offset,
-                                            a.z + right.z * lane.offset});
-            lane.points.push_back(LanePoint{b.x + right.x * lane.offset,
-                                            b.z + right.z * lane.offset});
+            lane.length = polyLen;
+            // 点序 = 行进方向；每个折线顶点沿该顶点法线平移 offset
+            lane.points.reserve(np);
+            for (size_t i = 0; i < np; ++i) {
+                lane.points.push_back(LanePoint{
+                    poly[i].x + nrm[i].x * lane.offset,
+                    poly[i].z + nrm[i].z * lane.offset});
+            }
             out->lanes.push_back(lane);
         }
     }
 
     // 连接表（禁掉头）：lane(u->v) outgoing = e'.from==v && e'.to!=u 的全部车道，
     // 按 lanes 下标序（= edges 文件序 x laneIndex 升序）遍历；incoming 对称。
+    // M-CITY-ROAD：上面的「每条 lane 全扫」是 O(n^2)——真实路网（3931 边 /
+    // ~1 万 lane）要 1e8 次；改成按节点索引后只扫本节点出发/到达的车道。
+    // 索引 vector 内 lane id 天然升序，集合与顺序与全扫逐位一致。
+    std::map<int32_t, std::vector<int32_t>> fromIndex;
+    std::map<int32_t, std::vector<int32_t>> toIndex;
+    for (const Lane& lane : out->lanes) {
+        fromIndex[lane.fromNode].push_back(lane.id);
+        toIndex[lane.toNode].push_back(lane.id);
+    }
     for (Lane& lane : out->lanes) {
-        for (const Lane& other : out->lanes) {
-            if (other.fromNode != lane.toNode) continue;
-            if (other.toNode == lane.fromNode) continue; // 掉头不建链
-            lane.outgoing.push_back(LaneLink{other.id});
+        bool hasForward = false;
+        const auto it = fromIndex.find(lane.toNode);
+        if (it != fromIndex.end()) {
+            for (const int32_t oid : it->second) {
+                if (out->lanes[static_cast<size_t>(oid)].toNode == lane.fromNode)
+                    continue;                   // 掉头不建链
+                lane.outgoing.push_back(LaneLink{oid});
+                hasForward = true;
+            }
+            // 死胡同例外：目标节点除回头外无任何出边时，真实驾驶必然掉头；
+            // 不放行则该 lane 在有向图上彻底孤立（实测真实路网 1066 条边因
+            // 断头孤立，最大强连通分量只有 10%）。只放开这一种情形——
+            // 有正常出边的路口仍然禁掉头（M-T0.1 口径不变）。
+            if (!hasForward) {
+                for (const int32_t oid : it->second) {
+                    if (out->lanes[static_cast<size_t>(oid)].toNode == lane.fromNode)
+                        lane.outgoing.push_back(LaneLink{oid});
+                }
+            }
         }
     }
     for (Lane& lane : out->lanes) {
-        for (const Lane& other : out->lanes) {
-            if (other.toNode != lane.fromNode) continue;
-            if (other.fromNode == lane.toNode) continue;
-            lane.incoming.push_back(LaneLink{other.id});
+        const auto it = toIndex.find(lane.fromNode);
+        if (it == toIndex.end()) continue;
+        for (const int32_t oid : it->second) {
+            if (out->lanes[static_cast<size_t>(oid)].fromNode == lane.toNode)
+                continue;
+            lane.incoming.push_back(LaneLink{oid});
         }
     }
     (void)edgeFirstLane;
@@ -224,6 +328,47 @@ std::string dumpLaneGraphJson(const LaneGraph& graph) {
         j["lanes"].push_back(jl);
     }
     return j.dump(2) + "\n";
+}
+
+// ---------------------------------------------------------------------------
+// M-CITY-ROAD: 车道吸附（寻路起终点）。真实路网里玩家/AI 的起终点是任意
+// 世界坐标，A* 只认 lane 下标，所以需要「最近车道」这一层。
+// ---------------------------------------------------------------------------
+float laneDistanceTo(const Lane& lane, float x, float z) {
+    if (lane.points.size() < 2) return -1.0f;
+    float best = -1.0f;
+    for (size_t i = 0; i + 1 < lane.points.size(); ++i) {
+        const LanePoint& a = lane.points[i];
+        const LanePoint& b = lane.points[i + 1];
+        const float dx = b.x - a.x;
+        const float dz = b.z - a.z;
+        const float seg2 = dx * dx + dz * dz;
+        float t = 0.0f;
+        if (seg2 > 0.0f) {
+            t = ((x - a.x) * dx + (z - a.z) * dz) / seg2;
+            t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
+        }
+        const float px = a.x + dx * t - x;
+        const float pz = a.z + dz * t - z;
+        const float d = std::sqrt(px * px + pz * pz);
+        if (best < 0.0f || d < best) best = d;
+    }
+    return best;
+}
+
+int32_t findNearestLane(const LaneGraph& graph, float x, float z, float maxDist) {
+    if (!isFinite(x) || !isFinite(z) || !(maxDist > 0.0f)) return -1;
+    int32_t bestLane = -1;
+    float bestD = maxDist;
+    for (const Lane& lane : graph.lanes) {
+        const float d = laneDistanceTo(lane, x, z);
+        // 严格小于 + lanes 下标升序遍历 => 同距离保留最小 lane id（确定性）
+        if (d >= 0.0f && d < bestD) {
+            bestD = d;
+            bestLane = lane.id;
+        }
+    }
+    return bestLane;
 }
 
 } // namespace nl::traffic

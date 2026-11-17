@@ -293,8 +293,56 @@ def calibrate(scene_entities: list[dict], ways: list[dict]) -> tuple:
 # ---------------------------------------------------------------------------
 # main build
 # ---------------------------------------------------------------------------
+def simplify_polyline(pts: list[tuple[float, float]], tol: float = 1.5
+                      ) -> list[tuple[float, float]]:
+    """Douglas-Peucker on an (x, z) polyline.
+
+    Keeps curvature that actually matters (>tol metres off the chord) and
+    drops the rest; a straight 5-point OSM way collapses to 2 points.
+    """
+    if len(pts) <= 2:
+        return list(pts)
+    (x0, z0), (x1, z1) = pts[0], pts[-1]
+    dx, dz = x1 - x0, z1 - z0
+    cl = math.hypot(dx, dz)
+    if cl < 1e-6:
+        dmax, idx = -1.0, 0
+        for i in range(1, len(pts) - 1):
+            d = math.hypot(pts[i][0] - x0, pts[i][1] - z0)
+            if d > dmax:
+                dmax, idx = d, i
+        if dmax <= tol:
+            return [pts[0], pts[-1]]
+        left = simplify_polyline(pts[:idx + 1], tol)
+        right = simplify_polyline(pts[idx:], tol)
+        return left[:-1] + right
+    dmax, idx = -1.0, 0
+    for i in range(1, len(pts) - 1):
+        d = abs(dx * (z0 - pts[i][1]) - (x0 - pts[i][0]) * dz) / cl
+        if d > dmax:
+            dmax, idx = d, i
+    if dmax <= tol:
+        return [pts[0], pts[-1]]
+    left = simplify_polyline(pts[:idx + 1], tol)
+    right = simplify_polyline(pts[idx:], tol)
+    return left[:-1] + right
+
+
+def edge_points(e: dict, nm: dict) -> list[tuple[float, float]]:
+    """Scene-space polyline of a roadnet edge (1.5 m simplified)."""
+    sh = e.get("shape")
+    if isinstance(sh, list) and len(sh) >= 3:
+        pts = [(float(p[0]), float(p[1])) for p in sh]
+    else:
+        a, b = nm[e["from"]], nm[e["to"]]
+        pts = [(float(a["x"]), float(a["z"])), (float(b["x"]), float(b["z"]))]
+    return simplify_polyline(pts, 1.5)
+
+
 def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
-               out_path: Path, seed: int) -> dict:
+               out_path: Path, seed: int, infill_step: float = 0.0,
+               infill_wmin: float = 0.0, infill_max: int = 0,
+               slab_max: float = 60.0) -> dict:
     scene = json.loads(scene_path.read_text(encoding="utf-8"))
     roadnet = json.loads(roadnet_path.read_text(encoding="utf-8"))
     entities = scene["entities"]
@@ -369,79 +417,132 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
     nm = {n["id"]: n for n in roadnet["nodes"]}
     CLEAR = 14.0        # intersection clearance (both ends)
     SIDEWALK = 3.5      # setback beyond road half-width
+    # M-CITY-ROAD: the roadnet is pulled with a 1.2 km pad so interior roads stay
+    # connected, but infill must stay inside the real-building extent — otherwise
+    # the outskirts eat the whole budget (measured: 361 of 4001 landed centrally)
+    # and the core goes sparse. Outside the box: real buildings + roads only.
+    _lons = [p["lon"] for w in ways for p in w["geometry"]]
+    _lats = [p["lat"] for w in ways for p in w["geometry"]]
+    _plon = 40.0 / max(abs(B), 1e-6)
+    _plat = 40.0 / max(abs(D), 1e-6)
+    _ex = (A + B * (min(_lons) - _plon), A + B * (max(_lons) + _plon))
+    _ez = (C + D * (min(_lats) - _plat), C + D * (max(_lats) + _plat))
+    bx0, bx1 = min(_ex), max(_ex)
+    bz0, bz1 = min(_ez), max(_ez)
     for e in roadnet["edges"]:
-        a = nm[e["from"]]
-        b = nm[e["to"]]
-        dx = b["x"] - a["x"]
-        dz = b["z"] - a["z"]
-        length = math.hypot(dx, dz)
-        if length < 2 * CLEAR + 8.0:
-            continue
-        ux, uz = dx / length, dz / length
+        if infill_max and stats["infill"] >= infill_max:
+            break
+        if e.get("reverse"):
+            continue        # twin of a two-way edge: build on the physical side
         w = float(e.get("width", 8.0))
-        yaw = math.atan2(-dz, dx)
-        t = CLEAR
-        while t < length - CLEAR:
-            for side in (1.0, -1.0):
-                depth = rng.uniform(10.0, 22.0)
-                bw = rng.uniform(12.0, 22.0)
-                gap = rng.uniform(4.0, 10.0)
-                h = height_mix(rng)
-                off = w / 2 + SIDEWALK + depth / 2
-                cx = a["x"] + ux * (t + bw / 2) + (-uz) * side * off
-                cz = a["z"] + uz * (t + bw / 2) + (ux) * side * off
-                if grid.hits(cx, cz, bw, depth, yaw):
-                    stats["skipped_overlap"] += 1
-                    continue
+        if infill_wmin and w < infill_wmin:
+            continue        # real roadnets are dense: fill along arterials only
+        pts = edge_points(e, nm)
+        nseg = len(pts) - 1
+        for si in range(nseg):
+            x0, z0 = pts[si]
+            x1, z1 = pts[si + 1]
+            dx, dz = x1 - x0, z1 - z0
+            seglen = math.hypot(dx, dz)
+            if seglen < 4.0:
+                continue
+            ux, uz = dx / seglen, dz / seglen
+            yaw = math.atan2(-dz, dx)
+            t0 = CLEAR if si == 0 else 0.0
+            t1 = CLEAR if si == nseg - 1 else 0.0
+            if seglen <= t0 + t1 + 4.0:
+                continue
+            t = t0
+            while t < seglen - t1:
+                for side in (1.0, -1.0):
+                    depth = rng.uniform(10.0, 22.0)
+                    bw = rng.uniform(12.0, 22.0)
+                    gap = rng.uniform(4.0, 10.0)
+                    h = height_mix(rng)
+                    off = w / 2 + SIDEWALK + depth / 2
+                    cx = x0 + ux * (t + bw / 2) + (-uz) * side * off
+                    cz = z0 + uz * (t + bw / 2) + (ux) * side * off
+                    if not (bx0 <= cx <= bx1 and bz0 <= cz <= bz1):
+                        continue        # outskirts: real roads, no infill
+                    if grid.hits(cx, cz, bw, depth, yaw):
+                        stats["skipped_overlap"] += 1
+                        continue
+                    entities.append({
+                        "id": next_id, "name": f"infill_{next_id}", "flags": 0,
+                        "parent": 0,
+                        "components": {
+                            "Model": {"mesh": tier_for(h),
+                                      "tint": [1.0, 1.0, 1.0]},
+                            "Transform": {
+                                "position": [round(cx, 2), round(h / 2, 2),
+                                             round(cz, 2)],
+                                "scale": [round(bw, 2), round(h, 2),
+                                          round(depth, 2)],
+                                "rotation": quat_yaw(yaw),
+                            },
+                        },
+                    })
+                    next_id += 1
+                    grid.insert(cx, cz, bw, depth, yaw)
+                    stats["infill"] += 1
+                if infill_max and stats["infill"] >= infill_max:
+                    break
+                t += infill_step if infill_step > 0 else (bw + gap)
+
+    # --- (2) road slabs: polyline-aware. A real roadnet edge carries the OSM
+    #     way's shape points; laying one straight slab per edge would cut every
+    #     curve, so we simplify the polyline (Douglas-Peucker, 1.5 m) and emit
+    #     one slab per remaining segment. Legacy straight edges (no shape) keep
+    #     the exact previous convention (single slab, scale_x = length + w) so
+    #     the already-committed scene rebuilds byte-identically. ---
+    nm = {n["id"]: n for n in roadnet["nodes"]}
+    for e in roadnet["edges"]:
+        if e.get("reverse"):
+            continue        # twin of a two-way edge: one slab per physical road
+        pts = edge_points(e, nm)
+        w = float(e.get("width", 8.0))
+        segs = len(pts) - 1
+        for si in range(segs):
+            x0, z0 = pts[si]
+            x1, z1 = pts[si + 1]
+            dx = x1 - x0
+            dz = z1 - z0
+            length = math.hypot(dx, dz)
+            if length < 0.6:
+                continue
+            # M-CITY-ROAD: cap per-slab length. A 1.1 km straight artery slab has
+            # a 158:1 aspect ratio and renders as a bright aliased streak at
+            # distance (measured: 361 slabs > 200 m produced white noise in the
+            # aerial). Splitting keeps every slab near-square to its width.
+            nsub = max(1, int(math.ceil(length / slab_max)))
+            sub = length / nsub
+            for k in range(nsub):
+                t0 = k / nsub
+                px0 = x0 + dx * t0
+                pz0 = z0 + dz * t0
+                px1 = x0 + dx * (t0 + 1.0 / nsub)
+                pz1 = z0 + dz * (t0 + 1.0 / nsub)
+                yaw = math.atan2(-(pz1 - pz0), px1 - px0)
+                slab_y = 0.05 + ((e["id"] * 7 + si * 3 + k) % 7) * 0.006
+                extra = w if (segs == 1 and nsub == 1) else min(w, max(2.0, sub * 0.5))
                 entities.append({
-                    "id": next_id, "name": f"infill_{next_id}", "flags": 0,
-                    "parent": 0,
+                    "id": next_id, "name": f"road_{e['id']}"
+                    + (f"_{si}_{k}" if (segs > 1 or nsub > 1) else ""),
+                    "flags": 0, "parent": 0,
                     "components": {
-                        "Model": {"mesh": tier_for(h),
-                                  "tint": [1.0, 1.0, 1.0]},
+                        "Model": {"mesh": "road_slab.glb",
+                                  "tint": [0.22, 0.22, 0.24]},
                         "Transform": {
-                            "position": [round(cx, 2), round(h / 2, 2),
-                                         round(cz, 2)],
-                            "scale": [round(bw, 2), round(h, 2),
-                                      round(depth, 2)],
+                            "position": [round((px0 + px1) / 2, 2),
+                                         round(slab_y, 3),
+                                         round((pz0 + pz1) / 2, 2)],
+                            "scale": [round(sub + extra, 2), 0.12, round(w, 2)],
                             "rotation": quat_yaw(yaw),
                         },
                     },
                 })
                 next_id += 1
-                grid.insert(cx, cz, bw, depth, yaw)
-                stats["infill"] += 1
-            t += bw + gap
-
-    # --- (2) road slabs: identical convention to densify_city.py ---
-    nm = {n["id"]: n for n in roadnet["nodes"]}
-    for e in roadnet["edges"]:
-        a = nm[e["from"]]
-        b = nm[e["to"]]
-        dx = b["x"] - a["x"]
-        dz = b["z"] - a["z"]
-        length = math.hypot(dx, dz)
-        if length < 1.0:
-            continue
-        w = float(e.get("width", 8.0))
-        yaw = math.atan2(-dz, dx)
-        slab_y = 0.05 + (e["id"] % 7) * 0.006
-        entities.append({
-            "id": next_id, "name": f"road_{e['id']}", "flags": 0, "parent": 0,
-            "components": {
-                "Model": {"mesh": "road_slab.glb",
-                          "tint": [0.22, 0.22, 0.24]},
-                "Transform": {
-                    "position": [round((a["x"] + b["x"]) / 2, 2),
-                                 round(slab_y, 3),
-                                 round((a["z"] + b["z"]) / 2, 2)],
-                    "scale": [round(length + w, 2), 0.12, round(w, 2)],
-                    "rotation": quat_yaw(yaw),
-                },
-            },
-        })
-        next_id += 1
-        stats["roads"] += 1
+                stats["roads"] += 1
 
     # --- (3) traffic signal poles: identical to densify_city.py ---
     for n in roadnet["nodes"]:
@@ -585,7 +686,8 @@ def selftest() -> int:
         for e in d["entities"]:
             k = e["name"].split("_")[0]
             kinds[k] = kinds.get(k, 0) + 1
-        assert kinds.get("road") == 1 and kinds.get("sigpole") == 1, kinds
+        # slab splitting means a 100 m fixture edge may become 2 slabs
+        assert kinds.get("road", 0) >= 1 and kinds.get("sigpole") == 1, kinds
         assert kinds.get("infill", 0) > 0, kinds
         print(f"real_city selftest: PASS (stats={s1})")
     return 0
@@ -607,6 +709,15 @@ def main(argv: list[str]) -> int:
     ap.add_argument("--out",
                     default=str(REPO_ROOT / "example/cg2-m0/city.scene.real.engine"))
     ap.add_argument("--seed", type=int, default=20260717)
+    ap.add_argument("--infill-step", type=float, default=0.0,
+                    help="metres between infill buildings along a road "
+                         "(0 = legacy bw+gap walk)")
+    ap.add_argument("--infill-width-min", type=float, default=0.0,
+                    help="only fill along roads at least this wide (m)")
+    ap.add_argument("--infill-max", type=int, default=0,
+                    help="cap on generated infill buildings (0 = uncapped)")
+    ap.add_argument("--slab-max", type=float, default=60.0,
+                    help="max road slab length in metres (long slabs alias)")
     a = ap.parse_args(argv)
     from glob import glob
     paths = sorted(Path(p) for p in glob(a.osm))
@@ -614,7 +725,8 @@ def main(argv: list[str]) -> int:
         print(f"real_city: no OSM files match {a.osm}", file=sys.stderr)
         return 2
     stats = build_city(Path(a.scene), Path(a.roadnet), paths, Path(a.out),
-                       a.seed)
+                       a.seed, a.infill_step, a.infill_width_min, a.infill_max,
+                       a.slab_max)
     print(f"real_city: osm_input={stats['osm_input']} "
           f"real_added={stats['real_added']} dup_scene={stats['dup_scene']} "
           f"infill={stats['infill']} "

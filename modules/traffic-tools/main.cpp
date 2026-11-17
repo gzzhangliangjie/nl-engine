@@ -297,8 +297,10 @@ int selftest(const std::string& emitFixture) {
         T0_CHECK(nl::traffic::findPathOnLanes(g, l0, l0, &pathOne, &perr) ==
                  nl::traffic::PathStatus::Ok);
         T0_CHECK(pathOne.size() == 1 && pathOne[0] == l0);
-        // 不可达：删掉 e4/e5（1<->3 整对）后 e0(0->1) 出边为空成孤端，
-        // e6(2->3) 与 e0 连通域断开 -> Unreachable（合法 lane，非参数错误）
+        // 不可达（M-CITY-ROAD 反锚，语义已变）：删掉 e4/e5（1<->3 整对）后节点 1
+        // 只剩回头路 -> 死胡同掉头规则放行 e0 -> e1，于是 e0 仍能经 0 绕到 e6。
+        // 这条原「Unreachable」锚现在反过来证明掉头规则生效（真实路网若不放行
+        // 掉头，1066 条断头边会让有向图碎成 10% 的强连通分量）。
         std::string cutGraph = fixture;
         const std::string e4line = "    { \"id\": 4, \"from\": 1, \"to\": 3, \"lanes_per_dir\": 1, \"speed_limit\": 13.9, \"width\": 1.0 },\n";
         const std::string e5line = "    { \"id\": 5, \"from\": 3, \"to\": 1, \"lanes_per_dir\": 1, \"speed_limit\": 13.9, \"width\": 1.0 },\n";
@@ -309,7 +311,23 @@ int selftest(const std::string& emitFixture) {
         nl::traffic::LaneGraph gc;
         T0_CHECK(nl::traffic::buildLaneGraphFromRoadnetJson(cutGraph.data(), cutGraph.size(), &gc, &err));
         T0_CHECK(gc.laneCount() == 6);
-        T0_CHECK(nl::traffic::findPathOnLanes(gc, laneByEdge(gc, 0), laneByEdge(gc, 6), &pathNeg, &perr) ==
+        std::vector<int32_t> uPath;
+        T0_CHECK(nl::traffic::findPathOnLanes(gc, laneByEdge(gc, 0), laneByEdge(gc, 6), &uPath, &perr) ==
+                 nl::traffic::PathStatus::Ok);
+        // 唯一路径 = e0(0->1) -> 掉头 e1(1->0) -> e2(0->2) -> e6(2->3)
+        T0_CHECK(uPath.size() == 4 && uPath[0] == laneByEdge(gc, 0) &&
+                 uPath[1] == laneByEdge(gc, 1) && uPath[2] == laneByEdge(gc, 2) &&
+                 uPath[3] == laneByEdge(gc, 6));
+        // 真不可达：连回头路 e1(1->0) 一起删 -> 节点 1 无任何出边，e0 成孤立端，
+        // 掉头规则也无处可掉（端点无出边可放行）-> A* 必须报 Unreachable。
+        std::string cutGraph2 = cutGraph;
+        const std::string e1line = "    { \"id\": 1, \"from\": 1, \"to\": 0, \"lanes_per_dir\": 1, \"speed_limit\": 13.9, \"width\": 1.0 },\n";
+        T0_CHECK(cutGraph2.find(e1line) != std::string::npos);
+        cutGraph2.erase(cutGraph2.find(e1line), e1line.size());
+        nl::traffic::LaneGraph gc2;
+        T0_CHECK(nl::traffic::buildLaneGraphFromRoadnetJson(cutGraph2.data(), cutGraph2.size(), &gc2, &err));
+        T0_CHECK(gc2.laneCount() == 5);
+        T0_CHECK(nl::traffic::findPathOnLanes(gc2, laneByEdge(gc2, 0), laneByEdge(gc2, 6), &pathNeg, &perr) ==
                  nl::traffic::PathStatus::Unreachable);
         T0_CHECK(!perr.empty());
         (void)l6;
@@ -986,6 +1004,8 @@ int usage() {
                  "usage:\n"
                  "  traffic-tools build <roadnet.json> [--dump out.json] [--stats]\n"
                  "  traffic-tools path <roadnet.json> --from <edgeId> --to <edgeId>\n"
+                 "  traffic-tools path <roadnet.json> --from-xz X,Z --to-xz X,Z\n"
+                 "                     (world-point snap: nearest lane within 300 m)\n"
                  "  traffic-tools lanes <roadnet.json> --png out.png [--size WxH]\n"
                  "  traffic-tools sim <roadnet.json> [--cars N] [--frames F] [--png out.png]\n"
                  "                                    [--loop] [--actuated] [--no-signals]\n"
@@ -1070,6 +1090,8 @@ int main(int argc, char** argv) {
         const std::string roadnetPath = argv[2];
         long fromEdge = -1, toEdge = -1;
         bool hasFrom = false, hasTo = false;
+        double fx = 0.0, fz = 0.0, tx = 0.0, tz = 0.0;
+        bool hasFromXZ = false, hasToXZ = false;
         for (int i = 3; i < argc; ++i) {
             if (std::strcmp(argv[i], "--from") == 0 && i + 1 < argc) {
                 fromEdge = std::atol(argv[++i]);
@@ -1077,11 +1099,18 @@ int main(int argc, char** argv) {
             } else if (std::strcmp(argv[i], "--to") == 0 && i + 1 < argc) {
                 toEdge = std::atol(argv[++i]);
                 hasTo = true;
+            } else if (std::strcmp(argv[i], "--from-xz") == 0 && i + 1 < argc) {
+                // M-CITY-ROAD: snap an arbitrary world point onto the nearest lane
+                if (std::sscanf(argv[++i], "%lf,%lf", &fx, &fz) != 2) return usage();
+                hasFromXZ = true;
+            } else if (std::strcmp(argv[i], "--to-xz") == 0 && i + 1 < argc) {
+                if (std::sscanf(argv[++i], "%lf,%lf", &tx, &tz) != 2) return usage();
+                hasToXZ = true;
             } else {
                 return usage();
             }
         }
-        if (!hasFrom || !hasTo) return usage();
+        if ((!hasFrom && !hasFromXZ) || (!hasTo && !hasToXZ)) return usage();
         std::string body, err;
         if (!readFile(roadnetPath, &body, &err)) {
             std::fprintf(stderr, "traffic-tools: %s\n", err.c_str());
@@ -1098,12 +1127,28 @@ int main(int argc, char** argv) {
                 if (l.edgeId == static_cast<int32_t>(edgeId)) return l.id;
             return -1;
         };
-        const int32_t from = laneOfEdge(fromEdge);
-        const int32_t to = laneOfEdge(toEdge);
+        const int32_t from = hasFromXZ
+            ? nl::traffic::findNearestLane(g, static_cast<float>(fx),
+                                          static_cast<float>(fz), 300.0f)
+            : laneOfEdge(fromEdge);
+        const int32_t to = hasToXZ
+            ? nl::traffic::findNearestLane(g, static_cast<float>(tx),
+                                          static_cast<float>(tz), 300.0f)
+            : laneOfEdge(toEdge);
         if (from < 0 || to < 0) {
-            std::fprintf(stderr, "traffic-tools: edge id %ld/%ld has no lane\n",
-                         fromEdge, toEdge);
+            std::fprintf(stderr,
+                         "traffic-tools: no lane resolved (from=%d to=%d; "
+                         "snap radius 300 m for --from-xz/--to-xz)\n",
+                         from, to);
             return 1;
+        }
+        if (hasFromXZ) {
+            std::printf("from snap   : (%.1f,%.1f) -> lane %d edge %d\n", fx, fz,
+                        from, g.lanes[static_cast<size_t>(from)].edgeId);
+        }
+        if (hasToXZ) {
+            std::printf("to snap     : (%.1f,%.1f) -> lane %d edge %d\n", tx, tz,
+                        to, g.lanes[static_cast<size_t>(to)].edgeId);
         }
         std::vector<int32_t> path;
         if (nl::traffic::findPathOnLanes(g, from, to, &path, &err) !=
