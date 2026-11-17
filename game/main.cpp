@@ -90,7 +90,7 @@ struct Options {
     bool audioRealtime = false;
     std::string city = "example/cg2-m0";
     std::string cityScene;        // resolved city/city.scene.engine
-    std::string citySceneName = "city.scene.engine";  // --city-scene override
+    std::string citySceneName = "city.scene.real.engine";  // --city-scene override
     std::string playScript;       // optional frame-script file
     std::string screenshot;
     int screenshotFrame = -1;     // which rendered frame writes the PNG (-1 = last)

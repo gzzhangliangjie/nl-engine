@@ -1,20 +1,23 @@
 #!/usr/bin/env python3
-"""real_city.py - M-CITY-OSM: pure real-OSM-building city scene.
+"""real_city.py - M-CITY-OSM: real-OSM buildings as the city base.
 
-User decision (2026-11-17): replace procedural infill with the 441 real OSM
-buildings fetched into modules/citygen/test/zjx-bld-q{1..4}.json. Roads and
-signal poles (real OSM roadnet) are kept exactly as densify_city.py made them;
-the 1408 procedural infill buildings are dropped.
+User decisions (2026-11-17): 441 real OSM buildings fetched into
+modules/citygen/test/zjx-bld-q{1..4}.json; first "pure real" (no infill),
+then revised after seeing the sparse aerial: "在真实地图的基础上再做生成" —
+real buildings occupy the rejection grid FIRST, then procedural infill
+(densify_city.py's along-road generator) fills the remaining gaps.
 
 Products:
   city.scene.real.engine = base cg2 scene (150 OSM bld_ entities + landmark
-  tower + cars) + road slabs + signal poles + NEW real OSM buildings from the
-  four quadrant json files (dedup by OSM way id against existing bld_<id>).
+  tower + cars) + NEW real OSM buildings (dedup by way id) + procedural
+  infill along the roadnet + road slabs + signal poles.
 
 Coordinate calibration: cg2 scene entities are named bld_<osm_way_id>, so the
 way-id overlap between the scene and the OSM files gives exact (lon,lat)->
 (local x,z) pairs; a least-squares affine fit (no rotation, uniform meter
 scale expected) is derived from those pairs and verified by residual.
+The cg2 pipeline used the footprint BBOX CENTER (fit residual 0.005 m; the
+vertex-centroid convention drifts ~27 m on complex footprints).
 
 Building conversion:
   - footprint polygon (out geom) -> min-area rotated rect (rotating calipers
@@ -41,7 +44,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(REPO_ROOT / "scripts"))
-from densify_city import quat_yaw, tier_for  # noqa: E402
+from densify_city import height_mix, quat_yaw, tier_for  # noqa: E402
 
 USAGE = """real_city - M-CITY-OSM pure real-OSM buildings
 usage:
@@ -314,7 +317,7 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
             existing_ids.add(ent["name"])
 
     stats = {"osm_input": len(ways), "real_added": 0, "dup_scene": 0,
-             "skipped_overlap": 0, "skipped_tiny": 0, "roads": 0,
+             "infill": 0, "skipped_overlap": 0, "skipped_tiny": 0, "roads": 0,
              "signals": 0, "calib_pairs": len(pairs)}
 
     # --- (1) real OSM buildings (sorted by way id -> deterministic) ---
@@ -358,6 +361,57 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
         next_id += 1
         grid.insert(cx, cz, bw, depth, yaw)
         stats["real_added"] += 1
+
+    # --- (2) procedural infill along both road sides (real map as base,
+    #     generate on top: user decision 2026-11-17). Same generator and
+    #     conventions as densify_city.py; real buildings already occupy the
+    #     rejection grid so infill only fills the gaps. ---
+    nm = {n["id"]: n for n in roadnet["nodes"]}
+    CLEAR = 14.0        # intersection clearance (both ends)
+    SIDEWALK = 3.5      # setback beyond road half-width
+    for e in roadnet["edges"]:
+        a = nm[e["from"]]
+        b = nm[e["to"]]
+        dx = b["x"] - a["x"]
+        dz = b["z"] - a["z"]
+        length = math.hypot(dx, dz)
+        if length < 2 * CLEAR + 8.0:
+            continue
+        ux, uz = dx / length, dz / length
+        w = float(e.get("width", 8.0))
+        yaw = math.atan2(-dz, dx)
+        t = CLEAR
+        while t < length - CLEAR:
+            for side in (1.0, -1.0):
+                depth = rng.uniform(10.0, 22.0)
+                bw = rng.uniform(12.0, 22.0)
+                gap = rng.uniform(4.0, 10.0)
+                h = height_mix(rng)
+                off = w / 2 + SIDEWALK + depth / 2
+                cx = a["x"] + ux * (t + bw / 2) + (-uz) * side * off
+                cz = a["z"] + uz * (t + bw / 2) + (ux) * side * off
+                if grid.hits(cx, cz, bw, depth, yaw):
+                    stats["skipped_overlap"] += 1
+                    continue
+                entities.append({
+                    "id": next_id, "name": f"infill_{next_id}", "flags": 0,
+                    "parent": 0,
+                    "components": {
+                        "Model": {"mesh": tier_for(h),
+                                  "tint": [1.0, 1.0, 1.0]},
+                        "Transform": {
+                            "position": [round(cx, 2), round(h / 2, 2),
+                                         round(cz, 2)],
+                            "scale": [round(bw, 2), round(h, 2),
+                                      round(depth, 2)],
+                            "rotation": quat_yaw(yaw),
+                        },
+                    },
+                })
+                next_id += 1
+                grid.insert(cx, cz, bw, depth, yaw)
+                stats["infill"] += 1
+            t += bw + gap
 
     # --- (2) road slabs: identical convention to densify_city.py ---
     nm = {n["id"]: n for n in roadnet["nodes"]}
@@ -532,6 +586,7 @@ def selftest() -> int:
             k = e["name"].split("_")[0]
             kinds[k] = kinds.get(k, 0) + 1
         assert kinds.get("road") == 1 and kinds.get("sigpole") == 1, kinds
+        assert kinds.get("infill", 0) > 0, kinds
         print(f"real_city selftest: PASS (stats={s1})")
     return 0
 
@@ -562,6 +617,7 @@ def main(argv: list[str]) -> int:
                        a.seed)
     print(f"real_city: osm_input={stats['osm_input']} "
           f"real_added={stats['real_added']} dup_scene={stats['dup_scene']} "
+          f"infill={stats['infill']} "
           f"skipped_overlap={stats['skipped_overlap']} "
           f"skipped_tiny={stats['skipped_tiny']} "
           f"roads={stats['roads']} signals={stats['signals']} "
