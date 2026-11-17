@@ -238,6 +238,7 @@ bool TrafficSim::carPosition(size_t carIdx, LanePoint* out) const {
         if (remain <= seg || i + 2 == lane.points.size()) {
             const float t = (remain > seg ? 1.0f : remain / seg);
             out->x = a.x + dx * t;
+            out->y = a.y + (b.y - a.y) * t;   // M-RD-LAYER：桥面/匝道高程
             out->z = a.z + dz * t;
             return true;
         }

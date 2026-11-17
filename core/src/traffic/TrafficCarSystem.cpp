@@ -250,7 +250,8 @@ void TrafficCarSystem::writeBack() {
         }
         auto* t = world_.getComponent<nl::scene::TransformComponent>(ids_[ci]);
         if (!t) continue;
-        t->local.position = {p.x, 0.0f, p.z};
+        // M-RD-LAYER：车高跟随车道折线 y（桥面 7 m，地面 0；旧全 0 路网不变）。
+        t->local.position = {p.x, p.y, p.z};
         const float hy = yaw * 0.5f;
         t->local.rotation = {0.0f, std::sin(hy), 0.0f, std::cos(hy)};
     }

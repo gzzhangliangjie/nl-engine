@@ -796,9 +796,14 @@ int runGame(const Options& o) {
     if (resolved.cam == "free") {
         // Aerial: eye above --cam-at (dist doubles as altitude), pitch from
         // --pitch (clamped by FreeCamera), yaw from --yaw. Static pose.
-        const float eye[3] = {resolved.camAtX, std::max(resolved.dist, 120.0f),
-                              resolved.camAtZ};
+        const float alt = std::max(resolved.dist, 120.0f);
+        const float eye[3] = {resolved.camAtX, alt, resolved.camAtZ};
         camera.free().setPose(eye, resolved.yaw, resolved.pitch);
+        // M-DEPTH0：远景航拍近裁面放大（口径同 OrbitCamera kNearGate/kNearRatio）。
+        // 门控 alt > 200：街景/低空卡 alt=max(dist,120) ≤ 200 时 near 恒 0.1，
+        // M-GAME1 街景基线逐位不变（实测未门控时 near=1.875 会裁掉 2 像素）。
+        const float nearZ = (alt > 200.0f) ? std::max(0.1f, alt / 64.0f) : 0.1f;
+        camera.free().setNearZ(nearZ);
     }
 
     // 5) Window + renderer (sceneMode, like viewer runScene).
@@ -999,6 +1004,7 @@ int runGame(const Options& o) {
         nl::renderer::FrameParams fp{};
         std::memcpy(fp.mvp, vp.m, sizeof(fp.mvp));
         std::memcpy(fp.model, vp.m, sizeof(fp.model));
+        fp.nearPlane = camera.nearPlane();   // M-DEPTH0：远景放大 near 同步进 dag 误差投影
         fp.cullBack = true;
         fp.shading = 0;        // textured (ECS scene GLBs carry baked facade tiers)
         // M-CITY-LIT: weather chain (viewer M-WEA1 same fields; fixed t =

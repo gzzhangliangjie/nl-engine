@@ -53,6 +53,11 @@ void ChaseCamera::setFarZ(float farZ) {
     if (farZ > rig_.nearZ && std::isfinite(farZ)) rig_.farZ = farZ;
 }
 
+void ChaseCamera::setNearZ(float nearZ) {
+    // M-DEPTH0：镜像 setFarZ 校验口径（>0、< far、有限）。
+    if (nearZ > 0.0f && nearZ < rig_.farZ && std::isfinite(nearZ)) rig_.nearZ = nearZ;
+}
+
 void ChaseCamera::setDistance(float distance) {
     distance_ = clampf(distance, 1.0f, 50.0f);
 }

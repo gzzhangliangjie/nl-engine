@@ -16,7 +16,7 @@ namespace {
 
 // right = up x f（XZ 面）：f=(fx,fz) -> right=(fz,-fx)。f=+Z 时 right=+X（头文件口径）。
 LanePoint rightOf(float fx, float fz) {
-    return LanePoint{fz, -fx};
+    return LanePoint{fz, 0.0f, -fx};
 }
 
 struct RoadEdgeRec {
@@ -38,8 +38,8 @@ LanePoint unitDir(const LanePoint& a, const LanePoint& b) {
     const float dx = b.x - a.x;
     const float dz = b.z - a.z;
     const float l = std::sqrt(dx * dx + dz * dz);
-    if (!(l > 0.0f)) return LanePoint{0.0f, 0.0f};
-    return LanePoint{dx / l, dz / l};
+    if (!(l > 0.0f)) return LanePoint{0.0f, 0.0f, 0.0f};
+    return LanePoint{dx / l, 0.0f, dz / l};
 }
 
 } // namespace
@@ -93,11 +93,15 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
         const int32_t id = n["id"].get<int32_t>();
         const float x = n["x"].get<float>();
         const float z = n["z"].get<float>();
-        if (!isFinite(x) || !isFinite(z)) {
+        // M-RD-LAYER：节点高程（缺省 0 = 地面层；分层路网里 bridge/tunnel 节点
+        // 带 y = layer * 7.0）。缺失或非数字按 0 处理，旧 roadnet 原样可用。
+        const float y = (n.contains("y") && n["y"].is_number())
+                            ? n["y"].get<float>() : 0.0f;
+        if (!isFinite(x) || !isFinite(z) || !isFinite(y)) {
             if (err) *err = "node coordinate not finite";
             return false;
         }
-        if (!nodePos.emplace(id, LanePoint{x, z}).second) {
+        if (!nodePos.emplace(id, LanePoint{x, y, z}).second) {
             if (err) *err = "duplicate node id";
             return false;
         }
@@ -159,7 +163,7 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
                         ok = false;
                         break;
                     }
-                    sh.push_back(LanePoint{sx, sz});
+                    sh.push_back(LanePoint{sx, 0.0f, sz});
                 }
                 if (!ok) {
                     if (err) *err = "edge shape point must be [x,z] numbers";
@@ -197,6 +201,27 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
         poly.reserve(e.shape.size() >= 2 ? e.shape.size() : 2);
         if (e.shape.size() >= 2) poly = e.shape;
         else { poly.push_back(a); poly.push_back(b); }
+        // M-RD-LAYER：shape 顶点只有 x/z（roadnet 不存折线高程），按累计弧长
+        // 在起终点节点的 y 之间线性插值。同层桥面（两端 y 相同）恒等于该层
+        // 高度；跨层 connector（无 shape，两点）两端各取自己的 y；旧全 0
+        // roadnet 插值后仍全 0（历史车道图逐位不变）。
+        if (poly.size() >= 2) {
+            std::vector<float> cum(poly.size(), 0.0f);
+            for (size_t i = 1; i < poly.size(); ++i) {
+                const float ex = poly[i].x - poly[i - 1].x;
+                const float ez = poly[i].z - poly[i - 1].z;
+                cum[i] = cum[i - 1] + std::sqrt(ex * ex + ez * ez);
+            }
+            const float total = cum.back();
+            for (size_t i = 0; i < poly.size(); ++i) {
+                if (total > 0.0f) {
+                    poly[i].y = a.y + (b.y - a.y) * (cum[i] / total);
+                } else {
+                    // 平面投影完全重合（跨层 connector）：两端各自取节点高程。
+                    poly[i].y = (i + 1 == poly.size()) ? b.y : a.y;
+                }
+            }
+        }
         const size_t np = poly.size();
         // 顶点法线：端点用本段方向；内部点用相邻段方向的平均（miter），
         // 使偏移边在拐点连续（否则车道折线会在路口断开）。
@@ -205,7 +230,11 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
         for (size_t i = 0; i + 1 < np; ++i) {
             const float dx = poly[i + 1].x - poly[i].x;
             const float dz = poly[i + 1].z - poly[i].z;
-            const float seg = std::sqrt(dx * dx + dz * dz);
+            const float dy = poly[i + 1].y - poly[i].y;
+            // M-RD-LAYER：弧长含 y——跨层 connector 的上下端点平面投影可以完全
+            // 重合（实测 350 对 0.00 m），只看 x/z 会判成退化边（零长度）直接
+            // 构建失败。同层路面 dy=0，数值与旧实现逐位相同。
+            const float seg = std::sqrt(dx * dx + dy * dy + dz * dz);
             polyLen += seg;
             const LanePoint d = unitDir(poly[i], poly[i + 1]);
             const LanePoint r = rightOf(d.x, d.z);
@@ -246,6 +275,7 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
             for (size_t i = 0; i < np; ++i) {
                 lane.points.push_back(LanePoint{
                     poly[i].x + nrm[i].x * lane.offset,
+                    poly[i].y,
                     poly[i].z + nrm[i].z * lane.offset});
             }
             out->lanes.push_back(lane);
@@ -316,6 +346,7 @@ std::string dumpLaneGraphJson(const LaneGraph& graph) {
         nlohmann::json pts = nlohmann::json::array();
         for (const LanePoint& p : lane.points) {
             pts.push_back(nlohmann::json{{"x", static_cast<double>(p.x)},
+                                         {"y", static_cast<double>(p.y)},
                                          {"z", static_cast<double>(p.z)}});
         }
         jl["points"] = pts;
@@ -334,7 +365,7 @@ std::string dumpLaneGraphJson(const LaneGraph& graph) {
 // M-CITY-ROAD: 车道吸附（寻路起终点）。真实路网里玩家/AI 的起终点是任意
 // 世界坐标，A* 只认 lane 下标，所以需要「最近车道」这一层。
 // ---------------------------------------------------------------------------
-float laneDistanceTo(const Lane& lane, float x, float z) {
+float laneDistanceTo(const Lane& lane, float x, float z, float y) {
     if (lane.points.size() < 2) return -1.0f;
     float best = -1.0f;
     for (size_t i = 0; i + 1 < lane.points.size(); ++i) {
@@ -349,19 +380,21 @@ float laneDistanceTo(const Lane& lane, float x, float z) {
             t = t < 0.0f ? 0.0f : (t > 1.0f ? 1.0f : t);
         }
         const float px = a.x + dx * t - x;
+        const float py = (a.y + (b.y - a.y) * t) - y;   // M-RD-LAYER：三维距离
         const float pz = a.z + dz * t - z;
-        const float d = std::sqrt(px * px + pz * pz);
+        const float d = std::sqrt(px * px + py * py + pz * pz);
         if (best < 0.0f || d < best) best = d;
     }
     return best;
 }
 
-int32_t findNearestLane(const LaneGraph& graph, float x, float z, float maxDist) {
-    if (!isFinite(x) || !isFinite(z) || !(maxDist > 0.0f)) return -1;
+int32_t findNearestLane(const LaneGraph& graph, float x, float z, float maxDist,
+                        float y) {
+    if (!isFinite(x) || !isFinite(z) || !isFinite(y) || !(maxDist > 0.0f)) return -1;
     int32_t bestLane = -1;
     float bestD = maxDist;
     for (const Lane& lane : graph.lanes) {
-        const float d = laneDistanceTo(lane, x, z);
+        const float d = laneDistanceTo(lane, x, z, y);
         // 严格小于 + lanes 下标升序遍历 => 同距离保留最小 lane id（确定性）
         if (d >= 0.0f && d < bestD) {
             bestD = d;

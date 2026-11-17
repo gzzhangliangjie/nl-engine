@@ -124,7 +124,11 @@ Matrix4 OrbitCamera::viewProjection() const {
     // 模型会被远平面整体裁掉；dist ≤ 33 时取值与旧 kFar 完全一致，历史基线不破。
     // M-C2 merge：fov 用 fovY_ 实例字段（console cam.fov 可写，缺省 45° 不变）。
     const float farZ = std::max(kFar, distance_ * 3.0f);
-    return multiply(perspectiveZO(fovY_, aspect_, kNear, farZ), lookAt(eye, center, up));
+    // M-DEPTH0：近裁面远景门控（口径见 camera.hpp kNearGate 注释）。与远平面
+    // 自适应同一模式：门控内取值与旧常量完全一致 → 历史基线逐位不变。
+    nearZ_ = (distance_ > kNearGate) ? std::max(kNear, distance_ * kNearRatio)
+                                     : kNear;
+    return multiply(perspectiveZO(fovY_, aspect_, nearZ_, farZ), lookAt(eye, center, up));
 }
 
 Matrix4 OrbitCamera::view() const {

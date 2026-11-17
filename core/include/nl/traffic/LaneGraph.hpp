@@ -27,9 +27,10 @@
 
 namespace nl::traffic {
 
-// 车道折线点（XZ 面，Y 恒 0；交通自持零耦合，不引 nl/math）
+// 车道折线点（世界坐标；y 由 roadnet 节点 elevation 插值，M-RD-LAYER 前恒 0）
 struct LanePoint {
     float x = 0.0f;
+    float y = 0.0f;   // 高程：node.y（= layer * 7.0m）沿弧长线性插值
     float z = 0.0f;
 };
 
@@ -69,12 +70,14 @@ bool buildLaneGraphFromRoadnetJson(const char* jsonBytes, size_t len,
 // 非诊断用途，不做 hand-edited 友好化（键序即契约）。
 std::string dumpLaneGraphJson(const LaneGraph& graph);
 
-// 最近车道吸附（M-CITY-ROAD，寻路起终点用）：返回离 (x,z) 最近的车道下标，
-// -1 = maxDist 内没有车道。距离按车道折线最近点算（不是端点）。
+// 最近车道吸附（M-CITY-ROAD，寻路起终点用）：返回离 (x,y,z) 最近的车道下标，
+// -1 = maxDist 内没有车道。距离按车道折线最近点算（不是端点），三维距离——
+// M-RD-LAYER 起同 x/z 的上下层车道靠 y 区分（缺省 y=0 即贴地面层，车寻路默认）。
 // 同距离取 lane 下标最小者（确定性）。复杂度 O(lanes * 点数)，一次查询毫秒级。
-int32_t findNearestLane(const LaneGraph& graph, float x, float z, float maxDist);
+int32_t findNearestLane(const LaneGraph& graph, float x, float z, float maxDist,
+                        float y = 0.0f);
 
-// 车道折线最近点到 (x,z) 的距离（诊断/吸附残差用）；lane 越界返回 -1。
-float laneDistanceTo(const Lane& lane, float x, float z);
+// 车道折线最近点到 (x,y,z) 的距离（诊断/吸附残差用）；lane 越界返回 -1。
+float laneDistanceTo(const Lane& lane, float x, float z, float y = 0.0f);
 
 } // namespace nl::traffic

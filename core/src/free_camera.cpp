@@ -42,6 +42,11 @@ void FreeCamera::setFarZ(float farZ) {
     if (farZ > rig_.nearZ && std::isfinite(farZ)) rig_.farZ = farZ;
 }
 
+void FreeCamera::setNearZ(float nearZ) {
+    // M-DEPTH0：镜像 setFarZ 校验口径（>0、< far、有限）。
+    if (nearZ > 0.0f && nearZ < rig_.farZ && std::isfinite(nearZ)) rig_.nearZ = nearZ;
+}
+
 void FreeCamera::setSpeed(float unitsPerSecond) {
     speed_ = clampf(unitsPerSecond, 0.1f, 500.0f);
 }

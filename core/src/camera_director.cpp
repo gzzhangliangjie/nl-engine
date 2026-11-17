@@ -139,6 +139,11 @@ Matrix4 CameraDirector::viewProjection() const {
     return mode_ == Mode::Chase ? chase_.viewProjection() : free_.viewProjection();
 }
 
+float CameraDirector::nearPlane() const {
+    // M-DEPTH0：dag 屏幕误差投影（g_dagProj.z）吃真实 near，远景放大后必须同步。
+    return mode_ == Mode::Chase ? chase_.nearZ() : free_.nearZ();
+}
+
 void CameraDirector::eyePosition(float out[3]) const {
     mode_ == Mode::Chase ? chase_.eyePosition(out) : free_.eyePosition(out);
 }

@@ -328,15 +328,32 @@ def simplify_polyline(pts: list[tuple[float, float]], tol: float = 1.5
     return left[:-1] + right
 
 
-def edge_points(e: dict, nm: dict) -> list[tuple[float, float]]:
-    """Scene-space polyline of a roadnet edge (1.5 m simplified)."""
+def edge_points(e: dict, nm: dict) -> list[tuple[float, float, float]]:
+    """Scene-space polyline (x, y, z) of a roadnet edge (1.5 m simplified).
+
+    M-RD-LAYER: y comes from the edge's endpoint nodes (roadnet node.y =
+    layer * 7.0 m) interpolated along the simplified polyline's arc length.
+    Same-layer bridge decks (both ends equal y) are flat at that elevation;
+    ground edges keep y = 0.0 exactly, so the old scene byte layout holds.
+    """
+    a, b = nm[e["from"]], nm[e["to"]]
+    ya = float(a.get("y", 0.0))
+    yb = float(b.get("y", 0.0))
     sh = e.get("shape")
     if isinstance(sh, list) and len(sh) >= 3:
         pts = [(float(p[0]), float(p[1])) for p in sh]
     else:
-        a, b = nm[e["from"]], nm[e["to"]]
         pts = [(float(a["x"]), float(a["z"])), (float(b["x"]), float(b["z"]))]
-    return simplify_polyline(pts, 1.5)
+    pts = simplify_polyline(pts, 1.5)
+    if ya == yb or len(pts) < 2:
+        return [(x, ya, z) for (x, z) in pts]
+    cum = [0.0]
+    for i in range(1, len(pts)):
+        cum.append(cum[-1] + math.hypot(pts[i][0] - pts[i - 1][0],
+                                        pts[i][1] - pts[i - 1][1]))
+    total = cum[-1] if cum[-1] > 0.0 else 1.0
+    return [(x, ya + (yb - ya) * cum[i] / total, z)
+            for i, (x, z) in enumerate(pts)]
 
 
 def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
@@ -440,8 +457,8 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
         pts = edge_points(e, nm)
         nseg = len(pts) - 1
         for si in range(nseg):
-            x0, z0 = pts[si]
-            x1, z1 = pts[si + 1]
+            x0, _y0, z0 = pts[si]
+            x1, _y1, z1 = pts[si + 1]
             dx, dz = x1 - x0, z1 - z0
             seglen = math.hypot(dx, dz)
             if seglen < 4.0:
@@ -503,12 +520,18 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
         w = float(e.get("width", 8.0))
         segs = len(pts) - 1
         for si in range(segs):
-            x0, z0 = pts[si]
-            x1, z1 = pts[si + 1]
+            x0, y0, z0 = pts[si]
+            x1, y1, z1 = pts[si + 1]
             dx = x1 - x0
             dz = z1 - z0
             length = math.hypot(dx, dz)
             if length < 0.6:
+                continue
+            # M-RD-LAYER：跨层匝道（两端高程差 > 0.5 m，即桥头 connector）本轮
+            # 不铺水平板——它需要 pitch 倾斜几何，挂 M-RD-RAMP。桥面本体和
+            # 地面路段照铺，各自落在自己那层的高度上。
+            if abs(y1 - y0) > 0.5:
+                stats["ramp_skipped"] = stats.get("ramp_skipped", 0) + 1
                 continue
             # M-CITY-ROAD: cap per-slab length. A 1.1 km straight artery slab has
             # a 158:1 aspect ratio and renders as a bright aliased streak at
@@ -523,7 +546,9 @@ def build_city(scene_path: Path, roadnet_path: Path, osm_paths: list[Path],
                 px1 = x0 + dx * (t0 + 1.0 / nsub)
                 pz1 = z0 + dz * (t0 + 1.0 / nsub)
                 yaw = math.atan2(-(pz1 - pz0), px1 - px0)
-                slab_y = 0.05 + ((e["id"] * 7 + si * 3 + k) % 7) * 0.006
+                # 高程：同层取该层高度（桥面 7.05，地面 0.05），保留原来的
+                # 6 mm 抖动以免相邻 slab 完全共面。
+                slab_y = (y0 + y1) * 0.5 + 0.05 + ((e["id"] * 7 + si * 3 + k) % 7) * 0.006
                 extra = w if (segs == 1 and nsub == 1) else min(w, max(2.0, sub * 0.5))
                 entities.append({
                     "id": next_id, "name": f"road_{e['id']}"

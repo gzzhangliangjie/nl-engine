@@ -4284,10 +4284,48 @@
 - **踩坑**：
   ① **有向图全锁死**：初版严格按 OSM oneway 建边，3931 条边**零反向孪生** → A* 连起点边都出不去（Python 复算 100% 不可达）；只做双向化仍不够（单向路把图切成 9.4% 的碎块）。最终解 = 默认全双向 + **死胡同掉头**（目标节点除回头路外无出边才放行）→ SCC=1。`--respect-oneway` 保留原始语义入口。
   ② **cases.json 参数错位自伤**：12:08 那次把 `--city-scene city.scene.engine` 插在 `--city` **后面**，`--city` 把 `--city-scene` 当自己的值吞掉、真路径变成未知选项 → game-m0/m1 街景卡从此 exit 2（回归 4/6 假红，直到本轮才发现）。教训：改 cases.json 的参数数组必须实跑一次那张卡。
-  ③ **航拍白噪点不是"实例上限"**：`triangles=52740` 不随 `objects` 从 10245→14499 增长是**实例化几何去重**的正常语义（`triangleCount_` = 各 batch 唯一几何之和）。真因是**深度精度**：`kNear=0.1` / `far=max(100,dist*3)` 标准 Z，2600m 处深度分辨率量级 ≈0.4m，而路面 slab 只有 0.12m 厚 → 与地面/相邻 slab 全场 z-fight，航拍片上路面碎成白虚线；同场景 250m 处连续完整（对照实证）；**平板对照**（把 11533 块 slab 的 y 全改成 0.05 重渲染）症状一像素不变，排除 6mm y 错位嫌疑。
+  ③ **航拍白噪点不是"实例上限"**：`triangles=52740` 不随 `objects` 从 10245→14499 增长是**实例化几何去重**的正常语义（`triangleCount_` = 各 batch 唯一几何之和）。
+  **【11-17 勘误：本条原判「深度精度」已被两个对照实验否掉，真因是 `mat4TRS` 的 R\*S 写成 S\*R，详见 M-DEPTH0 条】** 原结论为 `kNear=0.1` / `far=max(100,dist*3)` 标准 Z 下 2600m 处深度分辨率 ≈0.4m、0.12m 薄 slab 全场 z-fight；11-17 实测 near 抬到 40.6（该处分辨率 4m→1cm）**症状一像素不变**，把 11533 块 slab 的 y 全改成 0.05 也**一像素不变** → 两个实验同时排除深度与 y 错位。
   ④ **ground 平面缩水**：`span*0.6+100` 是 150 box 时代遗留（半个 bbox），6.7km 路网会露出硬切边 → 改 1.2× 全跨。
   ⑤ **VULKAN 假红**：改 core/tools 后只重编 DX12 就跑 VULKAN ctest → m-t0-traffic 两卡失败（VULKAN 侧 exe 陈旧）。两后端都要重编再跑。
   ⑥ **`--only` 不支持叠加**：`regression --only A --only B` 只有**最后一个**生效（实测 8 runs 全是 cg2-m0），要分次跑。
   ⑦ **全量回归在本 worktree 不可用**：`build/showcase/<tag>/` 历史快照没建，138 卡报「exe 缺失」——不是本轮回归问题，收口用 ctest + 当前轨道卡。
 - **下一步**：**立交桥/立体交通**（用户已定「构建完再排期」）：数据层节点加 `layer`、`LanePoint` 加 y、渲染加桥墩/护栏；**深度精度轨**（候选 M-DEPTH0：距离自适应 near 或 reverse-Z，6.7km 级城市航拍/远景的硬前提）；M-GAME2 候选（kinematic 车体 + 尾灯）不变。
+
+### 2026-11-17 M-DEPTH0：远景精度 + mat4TRS 真因修正（tag `depth-m0`）
+
+> 用户拍板「两个都做」= M-DEPTH0 + M-RD-LAYER。开工时按原判（深度精度）落自适应 near，**对照组实验把原判推翻**，真因是 `core/include/nl/math/math.hpp` 的 `mat4TRS`。
+
+- **提交版本**：feat/game，tag `depth-m0`。
+- **修改文件清单**：`core/include/nl/math/math.hpp`（mat4TRS）、`core/include/nl/core/camera.hpp` + `core/src/camera.cpp`（near 门控 + `mutable nearZ_`）、`core/include/nl/core/free_camera.hpp` + `core/src/free_camera.cpp` + `chase_camera` 同款（`setNearZ`/`nearZ()`）、`core/include/nl/core/camera_director.hpp` + `core/src/camera_director.cpp`（`nearPlane()` 分派）、`game/main.cpp`（aerial near + `fp.nearPlane`）、`example/cases.json`（game-m2 卡）、本台账。
+- **① 真因：`mat4TRS` 把 `R*S` 写成了 `S*R`**
+  - 原实现 `m.m[c*4+r] *= scale[r]`（按**行**乘）= 左乘 S；正确列向量约定是 `m.m[c*4+r] *= scale[c]`（列 c 乘 scale[c]）。
+  - 为什么 173 张历史卡从没红：`R=I`（轴对齐）或均匀 scale 时 `R*S ≡ S*R`。而真实路网场景里 **11521 块 slab + 2420 栋楼全是「有旋转 + 非均匀 scale」**。
+  - 走形量级：一块 `56 × 0.12 × 7` + yaw 108.8° 的路面 slab，旧实现变成 **27.02 × 65.79 的横条**（长宽倒挂，宽度 66 m 横跨 7–16 m 窄路）→ 全城 slab 错位 → 航拍碎成横向白条串。修复后精确回到 55.94 × 7.00（Python 两种实现独立复算）。
+  - **定位手法（可复用）**：轴对齐 vs 旋转「同尺寸」双 box 对照渲染 → 旋转那只变斜切平行四边形（`S·R` 特征形变）；再按最大 `s` 分量复算世界跨度钉死。全程 4 个实验，无一处靠猜。
+- **② 原判「深度精度」被两个对照实验否掉**：near 0.1→40.6（2600 m 处世界深度分辨率 4 m→1 cm）**症状一像素不变**；11533 块 slab 的 y 全统一到 0.05 **也一像素不变**。自适应 near 仍保留（远景精度确有不足，是 6.7 km 级取景的正确配置），但它不是白线根因。
+  - 口径：`kNearGate=200` / `kNearRatio=1/64`（`dist>200` 才抬，2600 m → near 40.6）；game aerial `alt=max(dist,120)`，同样 `alt>200` 才生效 —— 未门控时 dist 40 的街景卡被抬到 near 1.875，实测裁掉 2 像素（回归当场抓到）。
+- **门**：**ctest 184/184 双后端**（mat4TRS 修正不破坏任何数学/动画断言）；`game-m0` 6/6、`game-m1` 6/6、`cg2-m0` 8/8、`m-w2a-anim` 6/6 全 bytes ALL GREEN（这些场景要么零旋转要么均匀 scale，故零漂）。
+- **新卡**：`game-m2/aerial`（2600 m 全城）+ `game-m2/interchange`（420 m 立交区），双后端**各自**基线（细长斜三角形在远处两后端光栅化边界差 16 px / maxDelta 377，单后端内部两次渲染 sha 完全相同 = 各自确定性成立）。
+- **踩坑**：
+  ① 上一条 M-CITY-ROAD 台账「真因=深度精度」是**错的**，已就地勘误——错结论留档比没结论更贵。
+  ② `mutable` 只写进了注释没写进声明 → `C3490`（const 函数改成员）。
+  ③ 用 `--city-scene` 渲染隔离实验时 `game` 会因「无 city_box_tier boxes」exit 1，隔离场景至少要留 1 个 box tier 实体。
+
+### 2026-11-17 M-RD-LAYER：真实路网分层立交（tag `layer-m0`）
+
+> 用户拍板同批：「两个都做」。成熟方案对标：**OpenDRIVE** 的 z 参考线 + connecting-road（全标准唯一允许表面重叠的道路）＝「不连接是缺省，连接是显式声明」；**SUMO** `--osm.layer-elevation` 按 layer 抬升 + 默认按 layer 决定两条路能否连；**lanelet2** 靠「不共享边界即天然分离」；**Overture** 只有 2D + prohibited transitions（最弱）。
+
+- **提交版本**：feat/game，tag `layer-m0`。
+- **修改文件清单**：`scripts/real_roadnet.py`（way_structure/way_layer、节点身份含 layer、桥头 connector、selftest 分层断言）、`core/include/nl/traffic/LaneGraph.hpp` + `core/src/traffic/LaneGraph.cpp`（`LanePoint.y`、弧长含 y、shape 弧长插值、3D 吸附、dump 带 y）、`core/src/traffic/TrafficSim.cpp`（`carPosition`/`carPose` 插值 y）、`core/src/traffic/TrafficCarSystem.cpp`（车高跟随）、`scripts/real_city.py`（`edge_points` 返回 xyz + slab 落层 + 跨层匝道跳过）、`modules/traffic-tools/main.cpp`（`path` 打印 elevation）、产物 `example/cg2-m0/roadnet.real.json` + `city.scene.real.engine`。
+- **数据落地**：`way_layer` = OSM `layer`（多值取首段），缺省 bridge→+1 / tunnel→−1 / 其余 0；节点身份 = `(量化坐标, layer)`；节点 `y = layer * 7.0 m` 写进 roadnet（车道图/渲染/车高共用一个高程源）；bridge/tunnel way 的首末顶点在 9 m 内找最近异层节点建 `connector` 边（双向，lanes=1）；`compress_chains` 把 connector 端点强制成 junction（否则跨层路径会被折进一条边）。
+- **量化结果**（bbox+pad，2781 条 drivable way）：**3411 节点 / 9234 有向边 / 762 条跨层 connector / 71 个真实信号**；节点 y 八档 `−21/−14/−7/0/+7/+14/+21/+28`（3 层地下 + 4 层高架）；**350 对节点平面距离 0.00 m 但高程差 ≥7 m 保持分离**（旧实现全部焊成一个路口），其中 344 对已建 connector。
+- **车道图**：12886 lanes / 40122 links（分层前 11074 / 37651）。跨城寻路 **49 跳 / 5291.1 m，高程剖面 y −7.0 .. +7.0**；立交区短途 **16 跳 / 1330.7 m，起点 y 0.0 → 终点 y 14.0**（证明真能上二层）。
+- **渲染**：slab 落到各自层高（地面 0.05 / 一层 7.05 / 二层 14.05 / 四层 28.05）；桥面单独渲染呈**连续高架走廊**（含螺旋匝道），非碎块。
+- **门**：ctest 184/184 双后端；`game-m0` 6/6、`game-m1` 6/6、`cg2-m0` 8/8、`game-m2` 6/6 全 bytes。
+- **踩坑**：
+  ① **跨层 connector 的平面投影可以完全重合**（0.00 m）→ LaneGraph 只按 x/z 算弧长直接判 `degenerate edge (zero length)` 构建失败；弧长必须含 y。同层 dy=0，旧数据数值不变。
+  ② `LanePoint` 加字段后 `LanePoint{x, z}` **静默错位**（→ x, y=z, z=0），编译器不报错；改结构体必须全仓 grep 聚合初始化并写满分量。
+  ③ SUMO 生态同类坑（上海高架实战帖）：匝道漏标 layer 或上游共享节点 → 车流「凭空从高架跳地面」，业界也只能靠人工检查——我们的端点吸附是替代手段，**6 对重合节点没接上 connector**属已知残差。
+- **挂账**：**M-RD-RAMP**（匝道倾斜几何：当前跨层边不铺 slab，且 `quat_yaw` 只有 yaw 没有 pitch）；**M-RD-RENDER**（桥墩/箱梁/护栏——0.12 m 薄板从侧视看不出高差，实测把桥面加厚到 1.6 m 才可见）；信号按 lanelet2 的「灯→停止线→受控车道」链式关联重做（当前是整口设灯）。
 

@@ -1167,6 +1167,21 @@ int main(int argc, char** argv) {
         std::printf("lanes       : %s\n", seq.c_str());
         std::printf("length sum  : %.1f m\n",
                     nl::traffic::pathLength(g, path));
+        // M-RD-LAYER：路径高程剖面（分层路网的可观测证据）。全地面路网恒 0.0。
+        {
+            float ymin = 1e30f, ymax = -1e30f;
+            for (int32_t li : path) {
+                for (const auto& p : g.lanes[static_cast<size_t>(li)].points) {
+                    if (p.y < ymin) ymin = p.y;
+                    if (p.y > ymax) ymax = p.y;
+                }
+            }
+            const float y0 = g.lanes[static_cast<size_t>(path.front())].points.front().y;
+            const float y1 = g.lanes[static_cast<size_t>(path.back())].points.back().y;
+            std::printf("elevation   : y %.1f .. %.1f (start %.1f, goal %.1f)\n",
+                        static_cast<double>(ymin), static_cast<double>(ymax),
+                        static_cast<double>(y0), static_cast<double>(y1));
+        }
         return 0;
     }
 

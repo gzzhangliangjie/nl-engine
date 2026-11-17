@@ -16315,6 +16315,134 @@
      "command": "game.exe --traffic 5"
     }
    ]
+  },
+  {
+   "id": "game-m2",
+   "label": "GAME M-DEPTH0 + M-RD-LAYER",
+   "name": "远景深度/矩阵修正 + 真实路网分层立交（跨层 connector）",
+   "tag": "layer-m0",
+   "date": "2026-11-17",
+   "summary": "M-DEPTH0：远景近裁面自适应（dist>200 时 near=dist/64）+ mat4TRS 修正（R*S，原实现误为 S*R：轴对齐或均匀 scale 时等价所以历史基线从未暴露，一旦旋转+非均匀 scale 就把 56x7 的路面压成 27x66 横条，11521 块 slab 全场错位 → 航拍碎白虚线的真因，与深度精度无关）。M-RD-LAYER：OSM layer/bridge/tunnel 进 roadnet（节点 y=layer*7.0、节点身份含 layer、桥头 9 m 内跨层 connector），LaneGraph 折线带 y（弧长含 y，跨层 connector 平面可完全重合）+ 3D 吸附，车高跟随，slab 落层。",
+   "acceptance": [
+    "双后端 rc=0，objects=15275（真实场景 14257 实体 + ground/player）",
+    "航拍 2600 m 道路连续（mat4TRS 修正前为横条状白虚线）",
+    "分层数据：节点 y 八档 -21/-14/-7/0/+7/+14/+21/+28；350 对平面重合但异层节点保持分离（344 对已有 connector）",
+    "车道图 12886 lanes / 40122 links；跨城寻路 49 跳 5291 m，高程剖面 -7..+7；桥区短途终点高程 14.0",
+    "历史基线零漂：game-m0 6/6、game-m1 6/6、cg2-m0 8/8 全 bytes（city.scene.engine 零旋转实体）",
+    "ctest 184/184 双后端（mat4TRS 修正不破坏任何数学/动画断言）"
+   ],
+   "preview": "example/game-m2/game-aerial.png",
+   "exe": {
+    "dx12": "build/DX12/game.exe",
+    "vulkan": "build/VULKAN/game.exe"
+   },
+   "cases": [
+    {
+     "id": "selftest",
+     "name": "selftest：无头全链（分层路网 + 车流）",
+     "kind": "tool",
+     "exe": {
+      "dx12": "build/DX12/game.exe",
+      "vulkan": "build/VULKAN/game.exe"
+     },
+     "args": [
+      "--selftest"
+     ],
+     "expectExit": 0,
+     "expectLog": "game-m0 selftest: PASS",
+     "command": "game.exe --selftest"
+    },
+    {
+     "id": "aerial",
+     "name": "全城航拍（真实 OSM 路网 + 分层立交，2600 m）",
+     "kind": "image",
+     "note": "M-DEPTH0 验收：mat4TRS 的 R*S 修正后路面不再被压成横条，2600 m 处道路连续。M-RD-LAYER：slab y 分八档（-21..+28 m）。双后端各自基线（细长斜三角形在远处的光栅化边界差 16 px/maxDelta 377，属两后端规则差异，非确定性）。",
+     "baselines": {
+      "dx12": "example/game-m2/game-aerial.png",
+      "vulkan": "example/game-m2/game-aerial-VULKAN.png"
+     },
+     "args": [
+      "--city",
+      "{root}/example/cg2-m0",
+      "--city-scene",
+      "city.scene.real.engine",
+      "--roadnet",
+      "roadnet.real.json",
+      "--signals",
+      "osm",
+      "--cam",
+      "free",
+      "--weather-seed",
+      "7",
+      "--weather-t",
+      "200",
+      "--sky-bg",
+      "--ground",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}",
+      "--cam-at",
+      "0,0",
+      "--dist",
+      "2600",
+      "--pitch",
+      "-55",
+      "--yaw",
+      "30",
+      "--frames",
+      "8"
+     ],
+     "expectExit": 0,
+     "expectLog": "objects=15275",
+     "command": "game.exe --city example/cg2-m0 --roadnet roadnet.real.json --signals osm --cam free --cam-at 0,0 --dist 2600 ..."
+    },
+    {
+     "id": "interchange",
+     "name": "立交区俯瞰（分层桥面，420 m）",
+     "kind": "image",
+     "note": "M-RD-LAYER 渲染侧证据：桥面 slab 落在 layer*7.0 m 高度（地面 0.05 / 一层 7.05 / 二层 14.05 / 四层 28.05）。桥墩与箱梁几何挂 M-RD-RENDER。",
+     "baselines": {
+      "dx12": "example/game-m2/game-interchange.png",
+      "vulkan": "example/game-m2/game-interchange-VULKAN.png"
+     },
+     "args": [
+      "--city",
+      "{root}/example/cg2-m0",
+      "--city-scene",
+      "city.scene.real.engine",
+      "--roadnet",
+      "roadnet.real.json",
+      "--signals",
+      "osm",
+      "--cam",
+      "free",
+      "--weather-seed",
+      "7",
+      "--weather-t",
+      "200",
+      "--sky-bg",
+      "--ground",
+      "--size",
+      "1280x720",
+      "--screenshot",
+      "{out}",
+      "--cam-at",
+      "-1950,980",
+      "--dist",
+      "420",
+      "--pitch",
+      "-32",
+      "--yaw",
+      "55",
+      "--frames",
+      "6"
+     ],
+     "expectExit": 0,
+     "expectLog": "objects=15275",
+     "command": "game.exe --city example/cg2-m0 --roadnet roadnet.real.json --signals osm --cam free --cam-at -1950,980 --dist 420 ..."
+    }
+   ]
   }
  ]
 }

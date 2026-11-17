@@ -182,12 +182,21 @@ inline Mat4 quatToMat4(const Quat& q) {
 }
 
 // TRS 构造：T(pos) * R(rot) * S(scale)（Carrot Transform::toTransformMatrix 顺序）。
+//
+// 列向量约定下 M = R * S 的正确做法是「第 c 列整体乘 scale 的第 c 个分量」。
+// 原实现按行乘（每列的第 r 行 *= scale[r]），等价于 S * R——轴对齐（R=I）或
+// 均匀 scale 时两式结果相同，所以历史基线一直没暴露；一旦「有旋转 + 非均匀
+// scale」就走形：单块路面 slab（56 × 0.12 × 7 + yaw）被压成斜切平行四边形，
+// 实测一块 56 m 长条在 150 m 距离只剩约 8 px。全城 11521 块 slab 一起错位，
+// 航拍里道路就碎成白虚线（M-CITY-ROAD 记的"白噪点"，真因在此，与深度精度
+// 无关；M-DEPTH0 期用轴对齐/旋转同尺寸对照实验定位）。
 inline Mat4 mat4TRS(const Vec3& pos, const Quat& rot, const Vec3& scale) {
     Mat4 m = quatToMat4(rot);
-    for (int c = 0; c < 3; ++c) {           // 旋转三列各乘 scale（列向量约定）
-        m.m[c * 4 + 0] *= scale.x;
-        m.m[c * 4 + 1] *= scale.y;
-        m.m[c * 4 + 2] *= scale.z;
+    const float s[3] = {scale.x, scale.y, scale.z};
+    for (int c = 0; c < 3; ++c) {             // R * S：列 c 乘 scale[c]
+        for (int r = 0; r < 3; ++r) {
+            m.m[c * 4 + r] *= s[c];
+        }
     }
     m.m[12] = pos.x; m.m[13] = pos.y; m.m[14] = pos.z;
     return m;

@@ -82,6 +82,39 @@ DEFAULT_LANES = {
     "living_street": 1, "service": 1, "road": 1, "busway": 1,
 }
 
+# M-RD-LAYER: vertical layering (OpenDRIVE lane-layer semantics, borrowed —
+# we keep JSON, not xodr). Node identity = (quantized x/z, layer) so stacked
+# interchanges no longer weld into one junction: measured 336 vertex buckets
+# in this bbox carry two different layers (218 bridge<->ground, 78
+# tunnel<->ground). Node y = layer * LAYER_HEIGHT is written into the
+# roadnet so LaneGraph, the renderer slabs and signal lamps all inherit the
+# same elevation from one source.
+LAYER_HEIGHT = 7.0
+STRUCT_GROUND, STRUCT_BRIDGE, STRUCT_TUNNEL = "ground", "bridge", "tunnel"
+
+
+def way_structure(tags: dict) -> str:
+    if tags.get("bridge") and tags["bridge"] != "no":
+        return STRUCT_BRIDGE
+    if tags.get("tunnel") and tags["tunnel"] != "no":
+        return STRUCT_TUNNEL
+    return STRUCT_GROUND
+
+
+def way_layer(tags: dict) -> float:
+    """OSM layer tag, with the OSM convention fallbacks: bridge -> +1,
+    tunnel -> -1. Multi-value layers ("−1;0") take the first segment."""
+    raw = str(tags.get("layer", "")).split(";")[0].strip()
+    try:
+        return float(raw)
+    except ValueError:
+        st = way_structure(tags)
+        if st == STRUCT_BRIDGE:
+            return 1.0
+        if st == STRUCT_TUNNEL:
+            return -1.0
+        return 0.0
+
 
 def in_pad_bbox(lat: float, lon: float, pad_m: float = PAD_M) -> bool:
     dlat = pad_m / M_PER_DEG_LAT
@@ -161,19 +194,29 @@ def parse_lanes(tags: dict, hw: str) -> int:
     return DEFAULT_LANES.get(hw, 1)
 
 
-def build_graph(ways: list[dict], pad_m: float = PAD_M) -> dict:
-    """Quantized-node graph; returns raw nodes + edges (pre-component-cut)."""
-    key_to_id: dict[tuple[int, int], int] = {}
+def build_graph(ways: list[dict], pad_m: float = PAD_M,
+                connector_m: float = 9.0) -> dict:
+    """Quantized-node graph; returns raw nodes + edges (pre-component-cut).
+
+    M-RD-LAYER: node identity = (quantized lat/lon, layer). Stacked layers
+    (bridge over ground) get distinct nodes, so the 336 measured layer
+    collisions no longer weld into one junction. Edges carry ``layer`` and
+    ``connector``; bridge/tunnel way endpoints that sit on a different layer
+    get an explicit cross-layer connector edge (OpenDRIVE connecting-road
+    semantics: the only place overlapping traffic layers may join).
+    """
+    key_to_id: dict[tuple[int, int, float], int] = {}
     nodes: list[dict] = []
     edges: list[dict] = []
+    struct_endpoints: set[int] = set()
 
-    def node_of(lat: float, lon: float) -> int:
-        key = (int(round(lat * 1e5)), int(round(lon * 1e5)))
+    def node_of(lat: float, lon: float, layer: float) -> int:
+        key = (int(round(lat * 1e5)), int(round(lon * 1e5)), layer)
         nid = key_to_id.get(key)
         if nid is None:
             nid = len(nodes)
             key_to_id[key] = nid
-            nodes.append({"id": nid, "lat": lat, "lon": lon})
+            nodes.append({"id": nid, "lat": lat, "lon": lon, "layer": layer})
         return nid
 
     for w in ways:
@@ -183,15 +226,64 @@ def build_graph(ways: list[dict], pad_m: float = PAD_M) -> dict:
         speed = parse_maxspeed(tags, hw)
         width = round(min(max(lanes * 2 * 3.5, 4.0), 16.0), 1)
         oneway = tags.get("oneway") in ("yes", "1", "-1")
+        layer = way_layer(tags)
+        structure = way_structure(tags)
         prev = None
+        first_nid = None
         for p in w["geometry"]:
-            nid = node_of(p["lat"], p["lon"])
+            nid = node_of(p["lat"], p["lon"], layer)
+            if first_nid is None:
+                first_nid = nid
             if prev is not None and nid != prev:
                 edges.append({"from": prev, "to": nid, "lanes_per_dir": lanes,
                               "speed_limit": speed, "width": width,
-                              "oneway": oneway, "way_id": w["id"]})
+                              "oneway": oneway, "way_id": w["id"],
+                              "layer": layer})
             prev = nid
-    return {"nodes": nodes, "edges": edges}
+        last_nid = prev
+        if structure != STRUCT_GROUND and first_nid is not None:
+            struct_endpoints.add(first_nid)
+            if last_nid is not None:
+                struct_endpoints.add(last_nid)
+
+    # Cross-layer connectors: each bridge/tunnel endpoint links to the NEAREST
+    # node on a DIFFERENT layer within connector_m. Deliberately endpoint-only
+    # (ramps attach at bridge heads in reality); interior overlap stays
+    # disconnected. Ground nodes keep their pre-layer ids (way traversal order
+    # is unchanged), so the existing scene baselines stay byte-identical.
+    by_id = {n["id"]: n for n in nodes}
+    cell = 10.0
+    grid: dict[tuple[int, int], list[int]] = {}
+    for n in nodes:
+        gx = int(n["lon"] * M_PER_DEG_LON // cell)
+        gy = int(n["lat"] * M_PER_DEG_LAT // cell)
+        grid.setdefault((gx, gy), []).append(n["id"])
+    n_conn = 0
+    for nid in sorted(struct_endpoints):
+        n = by_id[nid]
+        px = n["lon"] * M_PER_DEG_LON
+        py = n["lat"] * M_PER_DEG_LAT
+        gx, gy = int(px // cell), int(py // cell)
+        best = None
+        for dx in (-1, 0, 1):
+            for dy in (-1, 0, 1):
+                for oid in grid.get((gx + dx, gy + dy), ()):
+                    o = by_id[oid]
+                    if o["layer"] == n["layer"]:
+                        continue
+                    d = math.hypot(o["lon"] * M_PER_DEG_LON - px,
+                                   o["lat"] * M_PER_DEG_LAT - py)
+                    if d <= connector_m and (best is None or d < best[0]):
+                        best = (d, oid)
+        if best is not None:
+            edges.append({"from": nid, "to": best[1], "lanes_per_dir": 1,
+                          "speed_limit": 8.3, "width": 4.0,
+                          "oneway": False, "way_id": 0,
+                          "layer": n["layer"], "connector": True})
+            n_conn += 1
+    return {"nodes": nodes, "edges": edges,
+            "stats": {"connectors": n_conn,
+                      "struct_endpoints": len(struct_endpoints)}}
 
 
 def largest_component(nodes: list[dict], edges: list[dict]) -> tuple[list, list, dict]:
@@ -233,7 +325,12 @@ def compress_chains(nodes: list[dict], edges: list[dict]) -> tuple[list, list, d
     for ei, e in enumerate(edges):
         adj.setdefault(e["from"], []).append(ei)
         adj.setdefault(e["to"], []).append(ei)
-    is_junction = {n: (len(adj.get(n, [])) != 2) for n in adj}
+    # M-RD-LAYER: cross-layer connector endpoints are junctions by fiat —
+    # folding a connector into a chain would merge two layers into one edge.
+    connector_ends = {e["from"] for e in edges if e.get("connector")} | \
+                     {e["to"] for e in edges if e.get("connector")}
+    is_junction = {n: (len(adj.get(n, [])) != 2 or n in connector_ends)
+                   for n in adj}
     by_id = {n["id"]: n for n in nodes}
 
     def other(e, n):
@@ -323,6 +420,11 @@ def to_engine_roadnet(nodes: list[dict], edges: list[dict], A: float, B: float,
         out_nodes.append({"id": n["id"],
                           "x": round(A + B * n["lon"], 2),
                           "z": round(C + D * n["lat"], 2),
+                          # M-RD-LAYER: elevation = layer * LAYER_HEIGHT.
+                          # Ground nodes keep y=0.0 exactly (byte-stable with
+                          # the pre-layer roadnet); consumers: LaneGraph lane
+                          # points, road slabs, signal lamps — one source.
+                          "y": round(n.get("layer", 0.0) * LAYER_HEIGHT, 2),
                           "kind": "intersection", "signal": False})
     if signals:
         by_id = {n["id"]: n for n in out_nodes}
@@ -420,7 +522,9 @@ def main() -> int:
     print(f"drivable ways in padded bbox: {len(ways)}")
     g = build_graph(ways, a.pad)
     nodes, edges = g["nodes"], g["edges"]
-    print(f"raw nodes={len(nodes)} raw edges={len(edges)}")
+    print(f"raw nodes={len(nodes)} raw edges={len(edges)} "
+          f"connectors={g['stats']['connectors']} "
+          f"struct_endpoints={g['stats']['struct_endpoints']}")
     kn, ke, comp = largest_component(nodes, edges)
     print(f"components={comp['components']} largest={comp['largest']} "
           f"top={comp['top_sizes']} dropped={comp['dropped_nodes']}")
@@ -544,6 +648,27 @@ def selftest() -> int:
     assert len(rn3["edges"]) == 2, rn3["edges"]   # self loop dropped, twin added
     assert len(rn3["edges"][0]["shape"]) == 3, rn3["edges"][0]
     assert rn3["blocks"]["x"] > 0 and rn3["blocks"]["z"] == 0.0, rn3["blocks"]
+    # M-RD-LAYER: same coordinates on different layers stay separate nodes;
+    # bridge endpoints get cross-layer connectors; node y = layer * 7.0
+    lg = [{"id": 1, "tags": {"highway": "primary"},
+           "geometry": [{"lat": 23.10000, "lon": 113.30000},
+                        {"lat": 23.10000, "lon": 113.30100}]},
+          {"id": 2, "tags": {"highway": "primary", "bridge": "yes"},
+           "geometry": [{"lat": 23.10000, "lon": 113.30093},
+                        {"lat": 23.10000, "lon": 113.30107}]}]
+    lg_ret = build_graph(lg)
+    ln, le = lg_ret["nodes"], lg_ret["edges"]
+    assert len(ln) == 4 and [x["layer"] for x in ln].count(1.0) == 2, ln
+    lconn = [x for x in le if x.get("connector")]
+    assert len(lconn) == 2 and all(x["to"] == 1 for x in lconn), lconn
+    lrn = to_engine_roadnet(ln, le, 0.0, 111320.0, 0.0, 110540.0)
+    lys = {x["id"]: x["y"] for x in lrn["nodes"]}
+    assert set(lys.values()) == {0.0, 7.0}, lys
+    assert len(lrn["edges"]) == 2 + 2 + 4, lrn["edges"]  # ground+bridge 双向、2 connector 双向
+    assert way_layer({"bridge": "yes"}) == 1.0
+    assert way_layer({"tunnel": "yes"}) == -1.0
+    assert way_layer({"layer": "-1;0"}) == -1.0
+    assert way_layer({}) == 0.0
     print("selftest OK")
     return 0
 

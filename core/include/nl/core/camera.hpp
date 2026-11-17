@@ -45,7 +45,9 @@ public:
     // eyePosition = viewProjection() 里 lookAt 用的同一组 eye（不重复算两套）。
     void  eyePosition(float out[3]) const;
     float projectionYScale() const;   // 投影 [1][1] = 1/tan(fovY/2)
-    float nearPlane() const { return kNear; }
+    // M-DEPTH0：near 随取景距离自适应（远景门控），viewProjection() 每次调用刷新
+    // nearZ_。门控内恒等 kNear，历史基线（dist ≤ kNearGate 的全部用例）零漂。
+    float nearPlane() const { return nearZ_; }
 
 private:
     float yaw_      = 0.21f;   // rad（约 12°），默认能看到 Suzanne 正脸
@@ -53,10 +55,20 @@ private:
     float distance_ = 4.2f;
     float aspect_   = 16.0f / 9.0f;
     float fovY_     = kFovY;          // 缺省 = 历史 kFovY（M-C2 起可运行时改，setFovYDegrees clamp 20°..120°）
+    mutable float nearZ_ = kNear;     // M-DEPTH0：viewProjection() 刷新（门控内恒 kNear）；const 视图函数内更新缓存
 
     static constexpr float kFovY      = 0.785398163f;  // 45°（fovY_ 缺省值；M-C2 起仅作初值）
     static constexpr float kNear      = 0.1f;
     static constexpr float kFar       = 100.0f;
+    // M-DEPTH0：远景深度精度。标准 Z + near=0.1 时，z 处世界深度分辨率
+    // ≈ ε_ndc·z²/near（float32 ε_ndc≈6e-8）→ dist=2600 航拍处 ≈4 m，0.12 m 厚
+    // 的路面 slab 全场 z-fight（航拍碎白线根因，M-CITY-ROAD 挂账）。修复 =
+    // 远景门控放大近裁面：dist > kNearGate 时 near = dist·kNearRatio
+    // （2600 → 40.6，z=2600 处分辨率 ≈ 0.01 m）。门控内（dist ≤ 200，现有
+    // 148 张远景卡里最大 dist=48）near 恒 = kNear，历史基线逐位不变。
+    // ratio=1/64 依据：Δz = ε·z²/n ≈ ε·z²/(dist/64) = ε·64·z；z=2600 → 1 cm。
+    static constexpr float kNearGate  = 200.0f;
+    static constexpr float kNearRatio = 1.0f / 64.0f;
     static constexpr float kMinPitch  = -1.45f;
     static constexpr float kMaxPitch  =  1.45f;
     // 允许滚轮推进模型内部：cull=back 时全被剔除只剩背景，

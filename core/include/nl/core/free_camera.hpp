@@ -28,6 +28,8 @@ public:
     void setAspect(float aspect);
     void setFovYDegrees(float fovYDegrees);   // clamp 20..120（OrbitCamera 同款）
     void setFarZ(float farZ);                 // viewer 大场景取景用（缺省 100）
+    void setNearZ(float nearZ);               // M-DEPTH0：远景航拍近裁面放大（缺省 0.1）
+    float nearZ() const { return rig_.nearZ; } // dag 屏幕误差投影吃真实 near（fp.nearPlane）
     void setSpeed(float unitsPerSecond);      // clamp (0, 500]
 
     // 正交/透视（M-CAM0 基座扩展；透视缺省）

@@ -95,6 +95,7 @@ public:
     // ---- 只读输出（按当前模式分派，同 OrbitCamera 口径）----
     Matrix4 view() const;
     Matrix4 viewProjection() const;
+    float   nearPlane() const;   // M-DEPTH0：分派当前模式相机的真实 near（fp.nearPlane → dag 屏幕误差投影）
     void eyePosition(float out[3]) const;
 
     // 参数实调口（console cvar / 测试直调；viewer 不直接持有两台相机）
